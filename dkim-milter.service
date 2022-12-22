@@ -1,0 +1,12 @@
+[Unit]
+Description=DKIM Milter
+After=network-online.target nss-lookup.target
+Wants=network-online.target
+
+[Service]
+ExecStart=/usr/sbin/dkim-milter
+Restart=on-failure
+Environment=RUST_LOG=info
+
+[Install]
+WantedBy=multi-user.target
