@@ -1,9 +1,37 @@
-use std::str;
+use std::{
+    fmt::{self, Display, Formatter},
+    str,
+};
 use viadkim::signature::DomainName;
 
 const CRLF: &[u8] = b"\r\n";
 
 // pub type MailResult = Result<MailAddrs, ParseHeaderFromError>;
+
+// TODO rename!
+#[derive(Debug, PartialEq, Eq)]
+pub struct EmailAddr {
+    pub local_part: String,
+    pub domain: DomainName,
+}
+
+impl EmailAddr {
+    pub fn new(addr: &str) -> Result<EmailAddr, Box<dyn std::error::Error>> {
+        let (local_part, domain) = addr.rsplit_once('@').ok_or("not an email addr")?;
+
+        let domain = DomainName::new(domain)?;
+        Ok(Self {
+            local_part: local_part.into(),
+            domain,
+        })
+    }
+}
+
+impl Display for EmailAddr {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "{}@{}", self.local_part, self.domain.as_ref())
+    }
+}
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct MailAddrs(Vec<MailAddr>);  // non-empty
@@ -55,7 +83,7 @@ pub enum ParseHeaderFromError {
 
 // work on bytes, and do lenient (but not insecure) parsing, allowing ill-formed
 // but occasionally seen Latin1 et al in a header field value
-pub fn parse_header_from_domain(input: &[u8]) -> Result<DomainName, ParseHeaderFromError> {
+pub fn parse_header_from_address(input: &[u8]) -> Result<EmailAddr, ParseHeaderFromError> {
     let (mboxes, rest) = parse_mailboxes(input).ok_or(ParseHeaderFromError::Syntax)?;
 
     if !rest.is_empty() {
@@ -73,8 +101,11 @@ pub fn parse_header_from_domain(input: &[u8]) -> Result<DomainName, ParseHeaderF
     match mbox.domain_part {
         DomainPart::Domain(s) => {
             // validate domain name, see RFC 5322, §3.4.1
-            let s = DomainName::new(&s).map_err(|_| ParseHeaderFromError::InvalidDomain)?;
-            Ok(s)
+            let domain = DomainName::new(&s).map_err(|_| ParseHeaderFromError::InvalidDomain)?;
+            Ok(EmailAddr {
+                local_part: mbox.local_part,
+                domain,
+            })
         }
         DomainPart::DomainLiteral(_) => Err(ParseHeaderFromError::DomainLiteral),
     }
@@ -439,13 +470,16 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parse_header_from_domain_ok() {
+    fn parse_header_from_address_ok() {
         assert_eq!(
-            parse_header_from_domain(b"  (all right:)\t \"let's see\" <does@this.work> "),
-            Ok(DomainName::new("this.work").unwrap())
+            parse_header_from_address(b"  (all right:)\t \"let's see\" <does@this.work> "),
+            Ok(EmailAddr {
+                local_part: "does".to_owned(),
+                domain: DomainName::new("this.work").unwrap(),
+            })
         );
         assert_eq!(
-            parse_header_from_domain(b"  (all right:)\t \"let's see\" <does@this.121312> "),
+            parse_header_from_address(b"  (all right:)\t \"let's see\" <does@this.1213121> "),
             Err(ParseHeaderFromError::InvalidDomain)
         );
     }

@@ -2,8 +2,8 @@ use crate::{config::Config, session::Session};
 use byte_strings::c_str;
 use bytes::Bytes;
 use indymilter::{
-    Actions, Callbacks, Context, EomContext, Macros, NegotiateContext, ProtoOpts, SocketInfo,
-    Stage, Status,
+    Actions, Callbacks, Context, EomContext, MacroStage, Macros, NegotiateContext, ProtoOpts,
+    SocketInfo, Status,
 };
 use std::{
     borrow::Cow,
@@ -33,7 +33,6 @@ pub fn make_callbacks(config: Arc<Config>) -> Callbacks<Session> {
         .on_negotiate(move |cx, _, _| Box::pin(handle_negotiate(config.clone(), cx)))
         .on_connect(|cx, _, socket_info| Box::pin(handle_connect(cx, socket_info)))
         .on_mail(|cx, smtp_args| Box::pin(handle_mail(cx, smtp_args)))
-        .on_data(|cx| Box::pin(handle_data(cx)))
         .on_header(|cx, name, value| Box::pin(handle_header(cx, name, value)))
         .on_eoh(|cx| Box::pin(handle_eoh(cx)))
         .on_body(|cx, chunk| Box::pin(handle_body(cx, chunk)))
@@ -44,12 +43,12 @@ pub fn make_callbacks(config: Arc<Config>) -> Callbacks<Session> {
 
 async fn handle_negotiate(config: Arc<Config>, context: &mut NegotiateContext<Session>) -> Status {
     context.requested_actions |= Actions::ADD_HEADER;
+    context.requested_opts |= ProtoOpts::SKIP | ProtoOpts::LEADING_SPACE;
 
-    context.requested_opts |= ProtoOpts::SKIP | ProtoOpts::HEADER_LEADING_SPACE;
-
-    context.requested_macros.insert(Stage::Connect, c_str!("j").into());
-    context.requested_macros.insert(Stage::Mail, c_str!("{auth_type}").into());
-    context.requested_macros.insert(Stage::Data, c_str!("i").into());
+    let macros = &mut context.requested_macros;
+    macros.insert(MacroStage::Connect, c_str!("j").into());
+    macros.insert(MacroStage::Mail, c_str!("{auth_type}").into());
+    macros.insert(MacroStage::Data, c_str!("i").into());
 
     context.data = Some(Session::new(config));
 
@@ -89,14 +88,6 @@ async fn handle_mail(context: &mut Context<Session>, smtp_args: Vec<CString>) ->
     Status::Continue
 }
 
-async fn handle_data(context: &mut Context<Session>) -> Status {
-    let session = context.data.as_mut().unwrap();
-
-    session.queue_id = context.macros.queue_id().into();
-
-    Status::Continue
-}
-
 async fn handle_header(context: &mut Context<Session>, name: CString, value: CString) -> Status {
     let session = context.data.as_mut().unwrap();
     let id = context.macros.queue_id();
@@ -106,8 +97,8 @@ async fn handle_header(context: &mut Context<Session>, name: CString, value: CSt
 
     match session.handle_header(&id, name, value) {
         Ok(status) => status,
-        Err(()) => {
-            error!("{id}: failed to handle header callback");
+        Err(e) => {
+            error!("{id}: failed to handle header callback: {e}");
             Status::Tempfail
         }
     }
@@ -119,8 +110,8 @@ async fn handle_eoh(context: &mut Context<Session>) -> Status {
 
     match session.prepare_processing(&id).await {
         Ok(status) => status,
-        Err(()) => {
-            error!("{id}: failed to handle eoh callback");
+        Err(e) => {
+            error!("{id}: failed to handle eoh callback: {e}");
             Status::Tempfail
         }
     }
@@ -132,8 +123,8 @@ async fn handle_body(context: &mut Context<Session>, chunk: Bytes) -> Status {
 
     match session.process_body_chunk(chunk) {
         Ok(status) => status,
-        Err(()) => {
-            error!("{id}: failed to handle body callback");
+        Err(e) => {
+            error!("{id}: failed to handle body callback: {e}");
             Status::Tempfail
         }
     }
@@ -147,16 +138,17 @@ async fn handle_eom(context: &mut EomContext<Session>) -> Status {
 
     match session.finish_message(&id, &context.actions).await {
         Ok(status) => status,
-        Err(()) => {
-            error!("{id}: failed to handle eom callback");
+        Err(e) => {
+            error!("{id}: failed to handle eom callback: {e}");
             Status::Tempfail
         }
     }
 }
 
-async fn handle_abort(_context: &mut Context<Session>) -> Status {
-    // TODO
-    // let session = context.data.as_mut().unwrap();
+async fn handle_abort(context: &mut Context<Session>) -> Status {
+    let session = context.data.as_mut().unwrap();
+
+    session.abort_message();
 
     Status::Continue
 }

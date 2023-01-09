@@ -1,9 +1,16 @@
-use dkim_milter::{MILTER_NAME, VERSION};
+use dkim_milter::{CliOptions, Config, LogDestination, Socket, MILTER_NAME, VERSION};
 use futures::stream::StreamExt;
 use indymilter::Listener;
 use signal_hook::consts::{SIGINT, SIGTERM};
 use signal_hook_tokio::{Handle, Signals};
-use std::{env, error::Error, os::unix::fs::FileTypeExt, path::Path, process, str::FromStr};
+use std::{
+    env,
+    error::Error,
+    io::{stderr, stdout, Write},
+    os::unix::fs::FileTypeExt,
+    path::Path,
+    process,
+};
 use tokio::{
     fs,
     net::{TcpListener, UnixListener},
@@ -12,32 +19,41 @@ use tokio::{
 };
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
+const PROGRAM_NAME: &str = env!("CARGO_BIN_NAME");
+
 #[tokio::main]
 async fn main() {
-    match parse_args() {
-        Ok(()) => {}
+    let opts = match parse_args() {
+        Ok(opts) => opts,
         Err(e) => {
-            eprintln!("error: {}", e);
+            let _ = writeln!(stderr(), "{PROGRAM_NAME}: {e}");
             process::exit(1);
+        }
+    };
+
+    let registry = tracing_subscriber::registry();
+    let env_filter = EnvFilter::from_default_env();
+
+    match opts.log_destination {
+        None | Some(LogDestination::Journald) => {
+            let journald = tracing_journald::layer().unwrap();
+            registry.with(journald).with(env_filter).init();
+        }
+        Some(LogDestination::Stderr) => {
+            let stderr = tracing_subscriber::fmt::layer().with_writer(stderr);
+            registry.with(stderr).with(env_filter).init();
         }
     }
 
-    let journald = tracing_journald::layer().unwrap();
+    // TODO config reading needs logging, but logging needs config read
 
-    tracing_subscriber::registry()
-        // .with(tracing_subscriber::fmt::layer())  // TODO uncomment for stderr logging
-        .with(journald)
-        .with(EnvFilter::from_default_env())
-        .init();
-
-    // TODO
-    // let config = match Config::read(opts).await {
-    //     Ok(config) => config,
-    //     Err(e) => {
-    //         eprintln!("error: {}", e);
-    //         process::exit(1);
-    //     }
-    // };
+    let config = match Config::read(opts).await {
+        Ok(config) => config,
+        Err(e) => {
+            let _ = writeln!(stderr(), "{PROGRAM_NAME}: {e}");
+            process::exit(1);
+        }
+    };
 
     let (shutdown_tx, shutdown) = oneshot::channel();
 
@@ -46,21 +62,14 @@ async fn main() {
     let signals_handle = signals.handle();
     let signals_task = spawn_signals_task(signals, shutdown_tx);
 
-    // TODO
-    let socket: Socket = if true {
-        "inet:127.0.0.1:3000".parse().unwrap()
-    } else {
-        todo!()
-    };
-
     let addr;
     let mut socket_path = None;
-    let listener = match socket {
+    let listener = match &config.socket {
         Socket::Inet(socket) => {
             let listener = match TcpListener::bind(socket).await {
                 Ok(listener) => listener,
                 Err(e) => {
-                    eprintln!("error: could not bind TCP socket: {}", e);
+                    let _ = writeln!(stderr(), "{PROGRAM_NAME}: could not bind TCP socket: {e}");
                     process::exit(1);
                 }
             };
@@ -76,7 +85,7 @@ async fn main() {
             let listener = match UnixListener::bind(socket) {
                 Ok(listener) => listener,
                 Err(e) => {
-                    eprintln!("error: could not create UNIX domain socket: {}", e);
+                    let _ = writeln!(stderr(), "{PROGRAM_NAME}: could not create UNIX domain socket: {e}");
                     process::exit(1);
                 }
             };
@@ -89,70 +98,72 @@ async fn main() {
         }
     };
 
-    let result = dkim_milter::run(listener, shutdown).await;
+    let result = dkim_milter::run(listener, config, shutdown).await;
 
     cleanup(signals_handle, signals_task, socket_path).await;
 
     if let Err(e) = result {
-        eprintln!("error: {}", e);
+        let _ = writeln!(stderr(), "{PROGRAM_NAME}: {e}");
         process::exit(1);
     }
 }
 
-enum Socket {
-    Inet(String),
-    Unix(String),
-}
-
-impl FromStr for Socket {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        if let Some(s) = s.strip_prefix("inet:") {
-            Ok(Self::Inet(s.into()))
-        } else if let Some(s) = s.strip_prefix("unix:") {
-            Ok(Self::Unix(s.into()))
-        } else {
-            Err(format!("invalid value for socket: \"{}\"", s))
-        }
-    }
-}
-
 const USAGE_TEXT: &str = "\
-Usage:
-  dkim-milter [options...]
+[options]
 
 Options:
+  -c, --config-file <path>          Path to configuration file
   -h, --help                        Print usage information
+  -l, --log-destination <target>    Destination for log messages
+  -p, --socket <socket>             Listening socket of the milter
   -V, --version                     Print version information
 ";
 
-fn parse_args() -> Result<(), Box<dyn Error>> {
+fn parse_args() -> Result<CliOptions, Box<dyn Error>> {
     let mut args = env::args_os()
         .skip(1)
         .map(|s| s.into_string().map_err(|_| "invalid UTF-8 bytes in argument"));
 
+    let mut opts = CliOptions::default();
+
     while let Some(arg) = args.next() {
         let arg = arg?;
 
-        let _missing_value = || format!("missing value for option {}", arg);
+        let missing_value = || format!("missing value for option {arg}");
 
         match arg.as_str() {
             "-h" | "--help" => {
-                println!("{} {}", MILTER_NAME, VERSION);
-                println!();
-                print!("{}", USAGE_TEXT);
+                write!(stdout(), "Usage: {PROGRAM_NAME} {USAGE_TEXT}")?;
                 process::exit(0);
             }
             "-V" | "--version" => {
-                println!("{} {}", MILTER_NAME, VERSION);
+                writeln!(stdout(), "{MILTER_NAME} {VERSION}")?;
                 process::exit(0);
             }
-            arg => return Err(format!("unrecognized option: \"{}\"", arg).into()),
+            "-c" | "--config-file" => {
+                let path = args.next().ok_or_else(missing_value)??;
+
+                opts.config_file = path.into();
+            }
+            "-l" | "--log-destination" => {
+                let arg = args.next().ok_or_else(missing_value)??;
+                let target = arg.parse()
+                    .map_err(|_| format!("invalid value for log destination: \"{arg}\""))?;
+
+                opts.log_destination = Some(target);
+            }
+            "-p" | "--socket" => {
+                let arg = args.next().ok_or_else(missing_value)??;
+                let socket = arg.parse()
+                    .map_err(|_| format!("invalid value for socket: \"{arg}\""))?;
+
+                opts.socket = Some(socket);
+            }
+            arg => return Err(format!("unrecognized option: \"{arg}\"").into()),
         }
     }
 
-    Ok(())
+    Ok(opts)
 }
 
 fn spawn_signals_task(

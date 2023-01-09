@@ -1,0 +1,11 @@
+# Key name      Signing key
+# (DESIGN SKETCH, NOT IMPLEMENTED YET)
+
+# read from file:
+2021            </etc/dkimkeys/2020e.private
+
+# inline:
+inlinekey       YYPB3r6xTVvyVGcq0juTQKBg....
+
+# env variable:
+envkey          env:DKIM_2020_PRIV

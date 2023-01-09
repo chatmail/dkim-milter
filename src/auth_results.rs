@@ -17,7 +17,7 @@ pub enum AuthResultsKind {
 }
 
 impl AuthResultsKind {
-    pub fn as_str(&self) -> &'static str {
+    pub fn to_str(&self) -> &'static str {
         match self {
             Self::Pass => "pass",
             Self::Policy => "policy",
@@ -39,8 +39,9 @@ pub fn auth_results_kind_from_status(status: &VerificationStatus) -> AuthResults
             KeyRecordSyntax
             | DisallowedHashAlgorithm
             | DisallowedServiceType
-            | BodyHashMismatch
-            | InsufficientBodyLength => AuthResultsKind::Permerror,
+            | InsufficientBodyLength
+            | NoKeyFound => AuthResultsKind::Permerror,
+            BodyHashMismatch => AuthResultsKind::Fail,
             KeyLookup => AuthResultsKind::Temperror,
             DkimSignatureHeaderFormat(error) => match &error.cause {
                 DkimSignatureParseError::MissingVersionTag
@@ -81,7 +82,7 @@ pub fn auth_results_kind_from_status(status: &VerificationStatus) -> AuthResults
 pub fn assemble_auth_results(authserv_id: &str, sigs: Vec<VerificationResult>) -> String {
     let mut result = String::new();
 
-    write!(result, " {}", authserv_id).unwrap();
+    write!(result, " {authserv_id}").unwrap();
 
     for sig in sigs {
         debug!("signature result: {:?}", sig.status);
@@ -91,7 +92,7 @@ pub fn assemble_auth_results(authserv_id: &str, sigs: Vec<VerificationResult>) -
         let ar = auth_results_kind_from_status(&sig.status);
 
         result.push_str("dkim=");
-        result.push_str(ar.as_str());
+        result.push_str(ar.to_str());
 
         write!(
             result,

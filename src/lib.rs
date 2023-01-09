@@ -1,7 +1,3 @@
-// TODO
-// #![allow(unused_imports, unused_variables)]
-// #![allow(dead_code, unused_imports, unused_variables)]
-
 mod auth_results;
 mod callbacks;
 mod config;
@@ -10,10 +6,13 @@ mod format;
 mod resolver;
 mod session;
 
-use crate::config::Config;
+pub use crate::config::{
+    CliOptions, Config, LogDestination, ParseLogDestinationError, ParseSocketError, Socket,
+};
+
 use indymilter::IntoListener;
-use std::{future::Future, io, path::PathBuf, sync::Arc};
-use tracing::info;
+use std::{future::Future, io, sync::Arc};
+use tracing::{error, info};
 
 /// The DKIM Milter application name.
 pub const MILTER_NAME: &str = "DKIM Milter";
@@ -21,28 +20,24 @@ pub const MILTER_NAME: &str = "DKIM Milter";
 /// The DKIM Milter version string.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
-pub async fn run(listener: impl IntoListener, shutdown: impl Future) -> io::Result<()> {
-    let rsa_key_path = PathBuf::from("testkey_rsa.pem");
-    let ed25519_key_path = PathBuf::from("testkey_ed25519.pem");
+pub async fn run(
+    listener: impl IntoListener,
+    config: Config,
+    shutdown: impl Future,
+) -> io::Result<()> {
+    let config = Arc::new(config);
 
-    let (keys_path_to_id, keys_id_to_key) =
-        crypto::make_key_store(&rsa_key_path, &ed25519_key_path).await?;
-
-    // TODO
-    let default_config = Config {
-        keys_path_to_id,
-        keys_id_to_key,
-        rsa_key_path,
-        ed25519_key_path,
-        authserv_id: "example.gluet.ch".into(),
-        domain_to_sign: "gluet.ch".into(),
-    };
-    let default_config = Arc::new(default_config);
-
-    let callbacks = callbacks::make_callbacks(default_config);
+    let callbacks = callbacks::make_callbacks(config);
     let config = Default::default();
 
-    info!("{} {} starting", MILTER_NAME, VERSION);
+    info!("{MILTER_NAME} {VERSION} starting");
 
-    indymilter::run(listener, callbacks, config, shutdown).await
+    let result = indymilter::run(listener, callbacks, config, shutdown).await;
+
+    match &result {
+        Ok(()) => info!("{MILTER_NAME} {VERSION} shut down"),
+        Err(e) => error!("{MILTER_NAME} {VERSION} terminated with error: {e}"),
+    }
+
+    result
 }
