@@ -80,6 +80,13 @@ pub fn auth_results_kind_from_status(status: &VerificationStatus) -> AuthResults
     }
 }
 
+pub fn auth_results_reason_from_status(status: &VerificationStatus) -> Option<String> {
+    match status {
+        VerificationStatus::Success => None,
+        VerificationStatus::Failure(error) => Some(error.to_string()),
+    }
+}
+
 // TODO
 pub fn assemble_auth_results(authserv_id: &str, sigs: Vec<VerificationResult>) -> String {
     let mut result = String::new();
@@ -96,10 +103,12 @@ pub fn assemble_auth_results(authserv_id: &str, sigs: Vec<VerificationResult>) -
         result.push_str("dkim=");
         result.push_str(ar.to_str());
 
+        if let Some(reason) = auth_results_reason_from_status(&sig.status) {
+            write!(result, " reason=\"{reason}\"").unwrap();
+        }
+
         if let Some(key_size) = sig.key_size {
-            result.push_str(" (");
-            result.push_str(&key_size.to_string());
-            result.push_str("-bit key)");
+            write!(result, " ({}-bit key)", key_size.to_string()).unwrap();
         }
 
         write!(

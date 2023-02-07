@@ -133,7 +133,7 @@ async fn handle_body(context: &mut Context<Session>, chunk: Bytes) -> Status {
 async fn handle_eom(context: &mut EomContext<Session>) -> Status {
     debug!("finishing message");
 
-    let session = context.data.take().unwrap();
+    let session = context.data.as_mut().unwrap();
     let id = context.macros.queue_id();
 
     match session.finish_message(&id, &context.actions).await {

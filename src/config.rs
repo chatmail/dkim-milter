@@ -13,7 +13,7 @@ use tokio::fs;
 use tracing::warn;
 use viadkim::{
     crypto::SigningKey,
-    signature::{Canonicalization, DomainName, Selector},
+    signature::{Canonicalization, CanonicalizationAlgorithm, DomainName, Selector},
     signer::KeyId,
 };
 
@@ -216,7 +216,11 @@ impl Config {
             }
         };
 
-        let canonicalization = canonicalization.unwrap_or_default();
+        // in practice, relaxed/simple is most sensible default canonicalization
+        let canonicalization = canonicalization.unwrap_or(Canonicalization {
+            header: CanonicalizationAlgorithm::Relaxed,
+            body: CanonicalizationAlgorithm::Simple,
+        });
 
         let signature_config = SignatureConfig {
             canonicalization,

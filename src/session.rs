@@ -62,6 +62,7 @@ impl Session {
     }
 
     pub fn abort_message(&mut self) {
+        // TODO align abort and eom
         // reset everything except config, and connect-stage values ip and hostname
         self.auth = false;
         self.from_address = None;
@@ -217,7 +218,7 @@ impl Session {
     }
 
     pub async fn finish_message(
-        mut self,
+        &mut self,
         id: &str,
         actions: &impl ContextActions,
     ) -> Result<Status, Box<dyn Error>> {
@@ -280,6 +281,9 @@ impl Session {
                 }
             }
         }
+
+        // TODO reset to beginning of per-message handling
+        self.abort_message();
 
         Ok(Status::Continue)
     }
