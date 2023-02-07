@@ -3,7 +3,7 @@ use std::fmt::Write;
 use tracing::debug;
 use viadkim::{
     crypto::VerificationError,
-    signature::DkimSignatureParseError,
+    signature::DkimSignatureErrorKind,
     verifier::{VerificationResult, VerificationStatus, VerifierError},
 };
 
@@ -36,37 +36,39 @@ pub fn auth_results_kind_from_status(status: &VerificationStatus) -> AuthResults
     match status {
         VerificationStatus::Success => AuthResultsKind::Pass,
         VerificationStatus::Failure(error) => match error {
-            KeyRecordSyntax
+            WrongKeyType
+            | KeyRecordSyntax
             | DisallowedHashAlgorithm
             | DisallowedServiceType
+            | DomainMismatch
             | InsufficientBodyLength
             | NoKeyFound => AuthResultsKind::Permerror,
             BodyHashMismatch => AuthResultsKind::Fail,
             KeyLookup => AuthResultsKind::Temperror,
-            DkimSignatureHeaderFormat(error) => match &error.cause {
-                DkimSignatureParseError::MissingVersionTag
-                | DkimSignatureParseError::HistoricAlgorithm
-                | DkimSignatureParseError::MissingAlgorithmTag
-                | DkimSignatureParseError::MissingSignatureTag
-                | DkimSignatureParseError::MissingBodyHashTag
-                | DkimSignatureParseError::InvalidDomain
-                | DkimSignatureParseError::MissingDomainTag
-                | DkimSignatureParseError::SignedHeadersEmpty
-                | DkimSignatureParseError::FromHeaderNotSigned
-                | DkimSignatureParseError::MissingSignedHeadersTag
-                | DkimSignatureParseError::InvalidBodyLength
-                | DkimSignatureParseError::InvalidSelector
-                | DkimSignatureParseError::MissingSelectorTag
-                | DkimSignatureParseError::InvalidTimestamp
-                | DkimSignatureParseError::InvalidExpiration
-                | DkimSignatureParseError::DomainMismatch
-                | DkimSignatureParseError::InvalidUserId => AuthResultsKind::Permerror,
-                DkimSignatureParseError::UnsupportedVersion
-                | DkimSignatureParseError::UnsupportedAlgorithm
-                | DkimSignatureParseError::UnsupportedCanonicalization
-                | DkimSignatureParseError::QueryMethodsNotSupported
-                | DkimSignatureParseError::ValueSyntax
-                | DkimSignatureParseError::InvalidTagList => AuthResultsKind::Neutral,
+            DkimSignatureHeaderFormat(error) => match &error.kind {
+                DkimSignatureErrorKind::MissingVersionTag
+                | DkimSignatureErrorKind::HistoricAlgorithm
+                | DkimSignatureErrorKind::MissingAlgorithmTag
+                | DkimSignatureErrorKind::MissingSignatureTag
+                | DkimSignatureErrorKind::MissingBodyHashTag
+                | DkimSignatureErrorKind::InvalidDomain
+                | DkimSignatureErrorKind::MissingDomainTag
+                | DkimSignatureErrorKind::SignedHeadersEmpty
+                | DkimSignatureErrorKind::FromHeaderNotSigned
+                | DkimSignatureErrorKind::MissingSignedHeadersTag
+                | DkimSignatureErrorKind::InvalidBodyLength
+                | DkimSignatureErrorKind::InvalidSelector
+                | DkimSignatureErrorKind::MissingSelectorTag
+                | DkimSignatureErrorKind::InvalidTimestamp
+                | DkimSignatureErrorKind::InvalidExpiration
+                | DkimSignatureErrorKind::DomainMismatch
+                | DkimSignatureErrorKind::InvalidUserId => AuthResultsKind::Permerror,
+                DkimSignatureErrorKind::UnsupportedVersion
+                | DkimSignatureErrorKind::UnsupportedAlgorithm
+                | DkimSignatureErrorKind::UnsupportedCanonicalization
+                | DkimSignatureErrorKind::QueryMethodsNotSupported
+                | DkimSignatureErrorKind::ValueSyntax
+                | DkimSignatureErrorKind::InvalidTagList => AuthResultsKind::Neutral,
             },
             VerificationFailure(error) => match error {
                 VerificationError::InvalidKey
@@ -93,6 +95,12 @@ pub fn assemble_auth_results(authserv_id: &str, sigs: Vec<VerificationResult>) -
 
         result.push_str("dkim=");
         result.push_str(ar.to_str());
+
+        if let Some(key_size) = sig.key_size {
+            result.push_str(" (");
+            result.push_str(&key_size.to_string());
+            result.push_str("-bit key)");
+        }
 
         write!(
             result,

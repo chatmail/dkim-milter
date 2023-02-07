@@ -65,8 +65,8 @@ async fn main() {
     let addr;
     let mut socket_path = None;
     let listener = match &config.socket {
-        Socket::Inet(socket) => {
-            let listener = match TcpListener::bind(socket).await {
+        Socket::Inet(addr) => {
+            let listener = match TcpListener::bind(addr).await {
                 Ok(listener) => listener,
                 Err(e) => {
                     let _ = writeln!(stderr(), "{PROGRAM_NAME}: could not bind TCP socket: {e}");
@@ -76,13 +76,13 @@ async fn main() {
 
             Listener::Tcp(listener)
         }
-        Socket::Unix(socket) => {
+        Socket::Unix(path) => {
             // Before creating the socket file, try removing any existing socket
             // at the target path. This is to clear out a leftover file from a
             // previous, aborted execution.
-            try_remove_socket(&socket).await;
+            try_remove_socket(&path).await;
 
-            let listener = match UnixListener::bind(socket) {
+            let listener = match UnixListener::bind(path) {
                 Ok(listener) => listener,
                 Err(e) => {
                     let _ = writeln!(stderr(), "{PROGRAM_NAME}: could not create UNIX domain socket: {e}");

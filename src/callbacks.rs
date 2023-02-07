@@ -121,7 +121,7 @@ async fn handle_body(context: &mut Context<Session>, chunk: Bytes) -> Status {
     let session = context.data.as_mut().unwrap();
     let id = context.macros.queue_id();
 
-    match session.process_body_chunk(chunk) {
+    match session.process_body_chunk(chunk.as_ref()) {
         Ok(status) => status,
         Err(e) => {
             error!("{id}: failed to handle body callback: {e}");

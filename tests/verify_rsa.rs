@@ -3,9 +3,9 @@ mod common;
 pub use common::*;
 
 use bytes::Bytes;
-use dkim_milter::{CliOptions, Config};
+use dkim_milter::*;
 use indymilter::MacroStage;
-use indymilter_test::{Status, TestConnection};
+use indymilter_test::*;
 use tracing::debug;
 
 #[tokio::test]

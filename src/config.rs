@@ -13,7 +13,7 @@ use tokio::fs;
 use tracing::warn;
 use viadkim::{
     crypto::SigningKey,
-    signature::{DomainName, Selector},
+    signature::{Canonicalization, DomainName, Selector},
     signer::KeyId,
 };
 
@@ -121,6 +121,11 @@ pub struct LogConfig {
     pub log_destination: LogDestination,
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub struct SignatureConfig {
+    pub canonicalization: Canonicalization,
+}
+
 // TODO provisional
 pub struct Config {
     pub socket: Socket,
@@ -129,6 +134,8 @@ pub struct Config {
     pub key_store: CachedKeyStore,
 
     pub authserv_id: Option<String>,
+
+    pub signature_config: SignatureConfig,
 }
 
 impl Config {
@@ -141,6 +148,7 @@ impl Config {
         let mut signing_keys_file = None;
         let mut signing_senders_file = None;
         let mut authserv_id = None;
+        let mut canonicalization = None;
 
         let mut keys_seen = HashSet::new();
 
@@ -176,6 +184,11 @@ impl Config {
                         "authserv_id" => {
                             authserv_id = Some(v.to_owned());
                         }
+                        "canonicalization" => {
+                            let value = Canonicalization::from_str(v)
+                                .map_err(|_| io::Error::new(ErrorKind::Other, "invalid canonicalization"))?;
+                            canonicalization = Some(value);
+                        }
                         _ => panic!(),
                     }
 
@@ -203,11 +216,18 @@ impl Config {
             }
         };
 
+        let canonicalization = canonicalization.unwrap_or_default();
+
+        let signature_config = SignatureConfig {
+            canonicalization,
+        };
+
         let config = Config {
             socket,
             signing_senders,
             key_store,
             authserv_id,
+            signature_config,
         };
 
         Ok(config)
@@ -226,6 +246,7 @@ pub struct SenderEntry {
     pub domain: DomainName,
     pub selector: Selector,
     pub key_id: KeyId,
+    pub signature_config: Option<SignatureConfig>,
 }
 
 #[derive(Clone, Debug)]
@@ -234,7 +255,7 @@ pub struct TempSenderEntry {
     pub domain: DomainName,
     pub selector: Selector,
     pub key_name: String,
-    pub sig_config: Option<()>,  // TODO
+    pub signature_config: Option<SignatureConfig>,
 }
 
 async fn read_signing_config(
@@ -292,6 +313,7 @@ async fn read_signing_config(
             domain: entry.domain,
             selector: entry.selector,
             key_id: tmp[&entry.key_name],
+            signature_config: entry.signature_config,
         }
     }).collect();
     let signing_senders = SigningSenders {
@@ -345,7 +367,7 @@ fn parse_signing_senders_file_content(s: &str) -> Result<Vec<TempSenderEntry>, &
             domain,
             selector,
             key_name: key_name.into(),
-            sig_config: None,
+            signature_config: None,
         };
 
         entries.push(entry);
@@ -359,8 +381,8 @@ fn parse_sender_expr(s: &str) -> Result<Regex, Box<dyn Error>> {
     if s.contains('@') {
         // this is an email address expr (apply regex to entire address); example:
         // me+*@*.example.com
-        let pieces: Vec<_> = s.split("*")
-            .map(|s| regex::escape(s))
+        let pieces: Vec<_> = s.split('*')
+            .map(regex::escape)
             .collect();
         let re = format!("^(?i){}$", &pieces.join(".*"));
         Ok(Regex::new(&re).unwrap())
@@ -381,8 +403,8 @@ fn parse_sender_expr(s: &str) -> Result<Regex, Box<dyn Error>> {
             } else {
                 // try regex; example:
                 // sub*.example.com
-                let pieces: Vec<_> = s.split("*")
-                    .map(|s| regex::escape(s))
+                let pieces: Vec<_> = s.split('*')
+                    .map(regex::escape)
                     .collect();
                 let re = format!("^(?i).*@{}$", &pieces.join(".*"));
                 Ok(Regex::new(&re).unwrap())

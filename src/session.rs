@@ -1,11 +1,10 @@
 use crate::{
     auth_results,
-    config::{Config, SigningSenders},
+    config::{Config, SigningSenders, SignatureConfig},
     format::{self, EmailAddr},
     resolver::Resolver,
 };
 use bstr::ByteSlice;
-use bytes::Bytes;
 use indymilter::{ContextActions, Status};
 use std::{borrow::Cow, cmp, error::Error, mem, net::IpAddr, sync::Arc};
 use tracing::{debug, error, info};
@@ -173,7 +172,12 @@ impl Session {
             let key_id = match_.key_id;
             let key_type = self.config.key_store.get_key_type(key_id).unwrap();
 
-            let request = SigningRequest::new(domain, selector, key_type, key_id);
+            let mut request = SigningRequest::new(domain, selector, key_type, key_id);
+
+            let tmp_config = match_.signature_config.as_ref().unwrap_or(&self.config.signature_config);
+
+            request.canonicalization = tmp_config.canonicalization;
+            request.oversigned_headers = vec![FieldName::new("From").unwrap()];
 
             requests.push(request);
         }
@@ -193,15 +197,15 @@ impl Session {
         Ok(verifier)
     }
 
-    pub fn process_body_chunk(&mut self, chunk: Bytes) -> Result<Status, Box<dyn Error>> {
+    pub fn process_body_chunk(&mut self, chunk: &[u8]) -> Result<Status, Box<dyn Error>> {
         let status = match self.mode {
             Mode::Signing => {
                 let signer = self.signer.as_mut().unwrap();
-                signer.body_chunk(chunk.as_ref())
+                signer.body_chunk(chunk)
             }
             Mode::Verifying => {
                 let verifier = self.verifier.as_mut().unwrap();
-                verifier.body_chunk(chunk.as_ref())
+                verifier.body_chunk(chunk)
             }
         };
 
@@ -286,7 +290,7 @@ struct SenderMatch {
     domain: DomainName,
     selector: Selector,
     key_id: KeyId,
-    // + per-sig config
+    signature_config: Option<SignatureConfig>,
 }
 
 fn find_matching_senders(
@@ -308,6 +312,7 @@ fn find_matching_senders(
                 domain: entry.domain.clone(),
                 selector: entry.selector.clone(),
                 key_id: entry.key_id,
+                signature_config: entry.signature_config.clone(),
             });
         }
     }
@@ -369,6 +374,7 @@ mod tests {
                     domain: domain.clone(),
                     selector: selector.clone(),
                     key_id,
+                    signature_config: None,
                 }
             ],
         };
@@ -379,9 +385,10 @@ mod tests {
 
         assert_eq!(matches, vec![
             SenderMatch {
-                domain: domain.clone(),
-                selector: selector.clone(),
+                domain,
+                selector,
                 key_id,
+                signature_config: None,
             }
         ]);
     }
