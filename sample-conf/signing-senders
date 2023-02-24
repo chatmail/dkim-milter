@@ -1,0 +1,10 @@
+# Sender expression    Domain         Selector    Key name
+.example.com           example.com    rsa         rsa
+.example.com           example.com    ed25519     ed25519
+
+# The above sample configuration signs each email message from *@*.example.com
+# with the two (private) signing keys named "rsa" and "ed25519".
+#
+# The corresponding public keys can be found in DNS at
+# - "rsa._domainkey.example.com" (domain=example.com, selector=rsa)
+# - "ed25519._domainkey.example.com" (domain=example.com, selector=ed25519)

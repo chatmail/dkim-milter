@@ -1,0 +1,6 @@
+# Key name    Signing key
+rsa           <sample-conf/rsa.pem
+ed25519       <sample-conf/ed25519.pem
+
+# The above sample configuration declares two (private) signing keys named
+# "rsa" and "ed25519". The key files can be found at the specified paths.

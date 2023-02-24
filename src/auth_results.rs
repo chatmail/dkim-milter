@@ -42,9 +42,11 @@ pub fn auth_results_kind_from_status(status: &VerificationStatus) -> AuthResults
             | DisallowedServiceType
             | DomainMismatch
             | InsufficientBodyLength
+            | InvalidKeyDomain
             | NoKeyFound => AuthResultsKind::Permerror,
             BodyHashMismatch => AuthResultsKind::Fail,
-            KeyLookup => AuthResultsKind::Temperror,
+            KeyLookupTimeout
+            | KeyLookup => AuthResultsKind::Temperror,
             DkimSignatureHeaderFormat(error) => match &error.kind {
                 DkimSignatureErrorKind::MissingVersionTag
                 | DkimSignatureErrorKind::HistoricAlgorithm
@@ -62,6 +64,7 @@ pub fn auth_results_kind_from_status(status: &VerificationStatus) -> AuthResults
                 | DkimSignatureErrorKind::InvalidTimestamp
                 | DkimSignatureErrorKind::InvalidExpiration
                 | DkimSignatureErrorKind::DomainMismatch
+                | DkimSignatureErrorKind::ExpirationNotAfterTimestamp
                 | DkimSignatureErrorKind::InvalidUserId => AuthResultsKind::Permerror,
                 DkimSignatureErrorKind::UnsupportedVersion
                 | DkimSignatureErrorKind::UnsupportedAlgorithm
@@ -107,9 +110,10 @@ pub fn assemble_auth_results(authserv_id: &str, sigs: Vec<VerificationResult>) -
             write!(result, " reason=\"{reason}\"").unwrap();
         }
 
-        if let Some(key_size) = sig.key_size {
-            write!(result, " ({}-bit key)", key_size.to_string()).unwrap();
-        }
+        // TODO actually, this doesn't belong in Auth-Results
+        // if let Some(key_size) = sig.key_size {
+        //     write!(result, " ({}-bit key)", key_size.to_string()).unwrap();
+        // }
 
         write!(
             result,

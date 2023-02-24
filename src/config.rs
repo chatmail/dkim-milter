@@ -1,4 +1,3 @@
-use crate::crypto::CachedKeyStore;
 use regex::Regex;
 use std::{
     collections::{HashMap, HashSet},
@@ -14,7 +13,6 @@ use tracing::warn;
 use viadkim::{
     crypto::SigningKey,
     signature::{Canonicalization, CanonicalizationAlgorithm, DomainName, Selector},
-    signer::KeyId,
 };
 
 const DEFAULT_CONFIG_FILE: &str = match option_env!("DKIM_MILTER_CONFIG_FILE") {
@@ -115,6 +113,27 @@ impl FromStr for Socket {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
+pub enum OperationMode {
+    #[default]
+    Auto,  // sign if matching signing senders, verify otherwise
+    Verify,  // always verify, no signing
+    Sign,  // sign if matching signing senders, no verifying
+}
+
+impl FromStr for OperationMode {
+    type Err = &'static str;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "auto" => Ok(Self::Auto),
+            "verify" => Ok(Self::Verify),
+            "sign" => Ok(Self::Sign),
+            _ => Err("unknown mode"),
+        }
+    }
+}
+
 // TODO read log config, before other config (config reading requires logging)
 #[derive(Clone, Debug)]
 pub struct LogConfig {
@@ -131,11 +150,13 @@ pub struct Config {
     pub socket: Socket,
 
     pub signing_senders: SigningSenders,
-    pub key_store: CachedKeyStore,
+    pub signing_keys: HashMap<String, Arc<SigningKey>>,
 
     pub authserv_id: Option<String>,
 
     pub signature_config: SignatureConfig,
+
+    pub mode: OperationMode,
 }
 
 impl Config {
@@ -149,6 +170,7 @@ impl Config {
         let mut signing_senders_file = None;
         let mut authserv_id = None;
         let mut canonicalization = None;
+        let mut mode = None;
 
         let mut keys_seen = HashSet::new();
 
@@ -189,6 +211,11 @@ impl Config {
                                 .map_err(|_| io::Error::new(ErrorKind::Other, "invalid canonicalization"))?;
                             canonicalization = Some(value);
                         }
+                        "mode" => {
+                            let value = OperationMode::from_str(v)
+                                .map_err(|_| io::Error::new(ErrorKind::Other, "invalid mode"))?;
+                            mode = Some(value);
+                        }
                         _ => panic!(),
                     }
 
@@ -222,6 +249,8 @@ impl Config {
             body: CanonicalizationAlgorithm::Simple,
         });
 
+        let mode = mode.unwrap_or_default();
+
         let signature_config = SignatureConfig {
             canonicalization,
         };
@@ -229,9 +258,10 @@ impl Config {
         let config = Config {
             socket,
             signing_senders,
-            key_store,
+            signing_keys: key_store,
             authserv_id,
             signature_config,
+            mode,
         };
 
         Ok(config)
@@ -249,15 +279,6 @@ pub struct SenderEntry {
     pub sender_expr: Regex,
     pub domain: DomainName,
     pub selector: Selector,
-    pub key_id: KeyId,
-    pub signature_config: Option<SignatureConfig>,
-}
-
-#[derive(Clone, Debug)]
-pub struct TempSenderEntry {
-    pub sender_expr: Regex,
-    pub domain: DomainName,
-    pub selector: Selector,
     pub key_name: String,
     pub signature_config: Option<SignatureConfig>,
 }
@@ -265,7 +286,7 @@ pub struct TempSenderEntry {
 async fn read_signing_config(
     signing_keys_file: &str,
     signing_senders_file: &str,
-) -> io::Result<(CachedKeyStore, SigningSenders)> {
+) -> io::Result<(HashMap<String, Arc<SigningKey>>, SigningSenders)> {
     // Note: idea here is to warn but continue with an incomplete config and
     // only actually log an error when the milter is unable to sign a message
     // (for example, such a config does not prevent *verification* from working properly)
@@ -301,22 +322,16 @@ async fn read_signing_config(
         warn!("no sender exprs available, no signing will be done");
     }
 
-    // temporary map, mapping human-readable names to usize == KeyId
-    let tmp: HashMap<_, _> = signing_keys.keys().zip(0..).map(|(k, v)| {
-        (k.to_owned(), KeyId::new(v))
-    }).collect();
-
     let key_store: HashMap<_, _> = signing_keys.into_iter().map(|(k, v)| {
-        (tmp[&k], Arc::new(v))
+        (k, Arc::new(v))
     }).collect();
-    let key_store = CachedKeyStore::new(key_store);
 
     let entries: Vec<_> = signing_senders.into_iter().map(|entry| {
         SenderEntry {
             sender_expr: entry.sender_expr,
             domain: entry.domain,
             selector: entry.selector,
-            key_id: tmp[&entry.key_name],
+            key_name: entry.key_name,
             signature_config: entry.signature_config,
         }
     }).collect();
@@ -327,7 +342,7 @@ async fn read_signing_config(
     Ok((key_store, signing_senders))
 }
 
-async fn read_signing_senders_file(s: &str) -> io::Result<Vec<TempSenderEntry>> {
+async fn read_signing_senders_file(s: &str) -> io::Result<Vec<SenderEntry>> {
     let file_content = fs::read_to_string(s).await?;
 
     let map = parse_signing_senders_file_content(&file_content)
@@ -336,7 +351,7 @@ async fn read_signing_senders_file(s: &str) -> io::Result<Vec<TempSenderEntry>> 
     Ok(map)
 }
 
-fn parse_signing_senders_file_content(s: &str) -> Result<Vec<TempSenderEntry>, &'static str> {
+fn parse_signing_senders_file_content(s: &str) -> Result<Vec<SenderEntry>, &'static str> {
     let mut entries = vec![];
 
     for line in s.lines() {
@@ -366,7 +381,7 @@ fn parse_signing_senders_file_content(s: &str) -> Result<Vec<TempSenderEntry>, &
         let selector = Selector::new(selector)
             .map_err(|_| "invalid selector")?;
 
-        let entry = TempSenderEntry {
+        let entry = SenderEntry {
             sender_expr,
             domain,
             selector,

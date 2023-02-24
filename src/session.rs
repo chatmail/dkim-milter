@@ -1,6 +1,6 @@
 use crate::{
     auth_results,
-    config::{Config, SigningSenders, SignatureConfig},
+    config::{Config, SignatureConfig, SigningSenders, OperationMode},
     format::{self, EmailAddr},
     resolver::Resolver,
 };
@@ -9,18 +9,26 @@ use indymilter::{ContextActions, Status};
 use std::{borrow::Cow, cmp, error::Error, mem, net::IpAddr, sync::Arc};
 use tracing::{debug, error, info};
 use viadkim::{
-    canon::BodyCanonStatus,
+    canonicalize::BodyCanonStatus,
+    crypto::HashAlgorithm,
     header::{FieldBody, FieldName, HeaderFields},
-    signature::{self, DomainName, Selector},
-    signer::{KeyId, SigningStatus},
+    signature::{self, DomainName, Selector, SignatureAlgorithm},
+    signer::SigningStatus,
     verifier::{VerificationResult, VerificationStatus, VerifierError},
-    Signer, SigningRequest, Verifier,
+    Signer, SigningKey, SigningRequest, Verifier,
 };
 
-#[derive(Clone, Copy)]
+#[derive(Default)]
 pub enum Mode {
-    Signing,
-    Verifying,
+    #[default]
+    Inactive,
+    Signing(Signer<Arc<SigningKey>>),
+    Verifying(Verifier),
+}
+
+enum FromAddrError {
+    Syntax,
+    Multiple,
 }
 
 // TODO
@@ -31,12 +39,9 @@ pub struct Session {
     pub hostname: Option<String>,
 
     pub auth: bool,
-    from_address: Option<EmailAddr>,
+    from_address: Option<Result<EmailAddr, FromAddrError>>,
 
     mode: Mode,
-
-    verifier: Option<Verifier>,
-    signer: Option<Signer>,
 
     headers: Vec<(FieldName, FieldBody)>,
 }
@@ -52,10 +57,7 @@ impl Session {
             auth: false,
             from_address: None,
 
-            mode: Mode::Verifying,
-
-            verifier: None,
-            signer: None,
+            mode: Mode::Inactive,
 
             headers: vec![],
         }
@@ -66,9 +68,7 @@ impl Session {
         // reset everything except config, and connect-stage values ip and hostname
         self.auth = false;
         self.from_address = None;
-        self.mode = Mode::Verifying;
-        self.verifier = None;
-        self.signer = None;
+        self.mode = Mode::Inactive;
         self.headers = vec![];
     }
 
@@ -84,16 +84,18 @@ impl Session {
         // extract From header
         if name.eq_ignore_ascii_case("From") {
             if self.from_address.is_some() {
-                debug!("{id}: multiple From header fields");
-                return Ok(Status::Accept);
-            }
-            match format::parse_header_from_address(&value) {
-                Ok(addr) => {
-                    self.from_address = Some(addr);
-                }
-                Err(e) => {
-                    debug!("{id}: unusable From header field: {e:?}");
-                    return Ok(Status::Accept);
+                // if there was a From already, there are now multiple: invalidate
+                debug!("{id}: repeated From header field, ignoring From");
+                self.from_address = Some(Err(FromAddrError::Multiple));
+            } else {
+                match format::parse_header_from_address(&value) {
+                    Ok(addr) => {
+                        self.from_address = Some(Ok(addr));
+                    }
+                    Err(e) => {
+                        debug!("{id}: unusable From header field: {e:?}");
+                        self.from_address = Some(Err(FromAddrError::Syntax));
+                    }
                 }
             }
         }
@@ -107,50 +109,57 @@ impl Session {
     }
 
     pub async fn prepare_processing(&mut self, id: &str) -> Result<Status, Box<dyn Error>> {
-        // local and authenticated senders are authorised
-        let authzd = self.ip.filter(|i| i.is_loopback()).is_some() || self.auth;
-
-        let from_address = match self.from_address.as_ref() {
-            Some(from_address) => from_address,
-            None => {
-                debug!("{id}: no From header field in message");
-                return Ok(Status::Accept);
-            }
-        };
-
-        debug!("{id}: From address is: {}", from_address);
-
         let headers = mem::take(&mut self.headers);
         let headers = match HeaderFields::new(headers) {
             Ok(h) => h,
             Err(e) => {
+                // For now, give up if inputs don't look like an email header at all
                 debug!("{id}: unusable header fields: {e:?}");
                 return Ok(Status::Accept);
             }
         };
 
-        // TODO find matches in SigningSenders
-        let matches = find_matching_senders(&self.config.signing_senders, from_address);
+        match self.config.mode {
+            OperationMode::Auto | OperationMode::Sign => {
+                // local and authenticated senders are authorised
+                let authzd = self.ip.filter(|i| i.is_loopback()).is_some() || self.auth;
 
-        // signing mode if authorised and right domain to sign in From
-        self.mode = if authzd && !matches.is_empty() {
-            debug!("{id}: signing mode");
-            Mode::Signing
-        } else {
-            debug!("{id}: verifying mode");
-            Mode::Verifying
-        };
+                let from_address = match &self.from_address {
+                    Some(Ok(from_address)) => {
+                        debug!("{id}: From address is: {from_address}");
+                        Some(from_address)
+                    }
+                    _ => {
+                        debug!("{id}: no usable From header field in message");
+                        None
+                    }
+                };
 
-        match self.mode {
-            Mode::Signing => {
-                let signer = self.prepare_signer(headers, matches)?;
+                // TODO find matches in SigningSenders
+                let matches = match from_address {
+                    Some(from_address) => find_matching_senders(&self.config.signing_senders, from_address),
+                    None => vec![],
+                };
 
-                self.signer = Some(signer);
+                // signing mode if authorised and right domain to sign in From
+                self.mode = if authzd && !matches.is_empty() {
+                    debug!("{id}: signing mode");
+                    let signer = self.prepare_signer(headers, matches)?;
+                    Mode::Signing(signer)
+                } else {
+                    if self.config.mode == OperationMode::Auto {
+                        debug!("{id}: verifying mode");
+                        let verifier = self.prepare_verifier(headers).await?;
+                        Mode::Verifying(verifier)
+                    } else {
+                        Mode::Inactive
+                    }
+                };
             }
-            Mode::Verifying => {
+            OperationMode::Verify => {
+                debug!("{id}: verifying mode");
                 let verifier = self.prepare_verifier(headers).await?;
-
-                self.verifier = Some(verifier);
+                self.mode = Mode::Verifying(verifier);
             }
         }
 
@@ -161,7 +170,7 @@ impl Session {
         &mut self,
         headers: HeaderFields,
         matches: Vec<SenderMatch>,
-    ) -> Result<Signer, Box<dyn Error>> {
+    ) -> Result<Signer<Arc<SigningKey>>, Box<dyn Error>> {
         assert!(!matches.is_empty());
 
         // step through matches and create SigningRequest for each match
@@ -170,15 +179,19 @@ impl Session {
         for match_ in matches {
             let domain = match_.domain;
             let selector = match_.selector;
-            let key_id = match_.key_id;
-            let key_type = self.config.key_store.get_key_type(key_id).unwrap();
+            let key_name = match_.key_name;
+            let signing_key = self.config.signing_keys.get(&key_name).unwrap();
 
-            let mut request = SigningRequest::new(domain, selector, key_type, key_id);
+            let key_type = signing_key.to_key_type();
+            let signature_alg = SignatureAlgorithm::from((key_type, HashAlgorithm::Sha256));
+
+            let mut request = SigningRequest::new(domain, selector, signature_alg, signing_key.clone());
 
             let tmp_config = match_.signature_config.as_ref().unwrap_or(&self.config.signature_config);
 
             request.canonicalization = tmp_config.canonicalization;
             request.oversigned_headers = vec![FieldName::new("From").unwrap()];
+            // request.copy_headers = true;
 
             requests.push(request);
         }
@@ -199,13 +212,12 @@ impl Session {
     }
 
     pub fn process_body_chunk(&mut self, chunk: &[u8]) -> Result<Status, Box<dyn Error>> {
-        let status = match self.mode {
-            Mode::Signing => {
-                let signer = self.signer.as_mut().unwrap();
+        let status = match &mut self.mode {
+            Mode::Inactive => return Ok(Status::Skip),
+            Mode::Signing(signer) => {
                 signer.body_chunk(chunk)
             }
-            Mode::Verifying => {
-                let verifier = self.verifier.as_mut().unwrap();
+            Mode::Verifying(verifier) => {
                 verifier.body_chunk(chunk)
             }
         };
@@ -222,11 +234,10 @@ impl Session {
         id: &str,
         actions: &impl ContextActions,
     ) -> Result<Status, Box<dyn Error>> {
-        match self.mode {
-            Mode::Signing => {
-                let signer = self.signer.take().unwrap();
-                let key_store = &self.config.key_store;
-                let sigs = signer.finish(key_store).await;
+        match mem::take(&mut self.mode) {
+            Mode::Inactive => {}
+            Mode::Signing(signer) => {
+                let sigs = signer.finish().await;
 
                 for res in sigs {
                     let sstatus = res.status;
@@ -253,8 +264,7 @@ impl Session {
                     }
                 }
             }
-            Mode::Verifying => {
-                let verifier = self.verifier.take().unwrap();
+            Mode::Verifying(verifier) => {
                 let sigs = verifier.finish();
 
                 for sig in &sigs {
@@ -293,7 +303,7 @@ impl Session {
 struct SenderMatch {
     domain: DomainName,
     selector: Selector,
-    key_id: KeyId,
+    key_name: String,
     signature_config: Option<SignatureConfig>,
 }
 
@@ -315,7 +325,7 @@ fn find_matching_senders(
             matches.push(SenderMatch {
                 domain: entry.domain.clone(),
                 selector: entry.selector.clone(),
-                key_id: entry.key_id,
+                key_name: entry.key_name.clone(),
                 signature_config: entry.signature_config.clone(),
             });
         }
@@ -369,7 +379,7 @@ mod tests {
     fn find_matching_senders_ok() {
         let domain = DomainName::new("example.com").unwrap();
         let selector = Selector::new("sel1").unwrap();
-        let key_id = KeyId::new(1);
+        let key_name = String::from("mykey1");
 
         let signing_senders = SigningSenders {
             entries: vec![
@@ -377,7 +387,7 @@ mod tests {
                     sender_expr: Regex::new(".*@mail.example.com").unwrap(),
                     domain: domain.clone(),
                     selector: selector.clone(),
-                    key_id,
+                    key_name: key_name.clone(),
                     signature_config: None,
                 }
             ],
@@ -391,7 +401,7 @@ mod tests {
             SenderMatch {
                 domain,
                 selector,
-                key_id,
+                key_name,
                 signature_config: None,
             }
         ]);

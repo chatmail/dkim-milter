@@ -1,7 +1,6 @@
 mod auth_results;
 mod callbacks;
 mod config;
-mod crypto;
 mod format;
 mod resolver;
 mod session;

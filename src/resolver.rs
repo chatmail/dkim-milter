@@ -1,9 +1,6 @@
-use bytes::Bytes;
+use bstr::ByteSlice;
 use domain::{
-    base::{
-        message::RecordIter, name::ParsedDname, octets::ParseError, record::Record, Dname,
-        RecordSection, Rtype,
-    },
+    base::{iana::Rcode, Dname, Rtype},
     rdata::Txt,
     resolv::StubResolver,
 };
@@ -11,7 +8,6 @@ use std::{
     future::Future,
     io::{self, ErrorKind},
     pin::Pin,
-    str::FromStr,
     sync::Arc,
 };
 use viadkim::verifier::LookupTxt;
@@ -27,42 +23,64 @@ impl Resolver {
 
         Self { resolver }
     }
-
-    async fn lookup_txt_internal(
-        &self,
-        name: Dname<Vec<u8>>,
-    ) -> Result<Vec<Result<Vec<u8>, io::Error>>, io::Error> {
-        // TODO this is a building site, infer types etc.
-
-        let answer = self.resolver.query((name, Rtype::Txt)).await?;
-        let record_section: RecordSection<&Bytes> = answer
-            .answer()
-            .map_err(|_| io::Error::from(ErrorKind::InvalidData))?;
-        let record_iter: RecordIter<&Bytes, Txt<Bytes>> = record_section.limit_to::<Txt<Bytes>>();
-        let results: Vec<_> = record_iter
-            .map(
-                |res: Result<Record<ParsedDname<&Bytes>, Txt<Bytes>>, ParseError>| match res {
-                    Ok(record) => {
-                        let txt: Txt<Bytes> = record.into_data();
-                        Ok(txt.text::<Vec<u8>>().unwrap())
-                    }
-                    Err(_e) => Err(io::Error::from(ErrorKind::InvalidData)),
-                },
-            )
-            .collect();
-        Ok(results)
-    }
 }
 
 impl LookupTxt for Resolver {
-    type Answer = Vec<Result<Vec<u8>, io::Error>>;
-    type Query<'a> = Pin<Box<dyn Future<Output = Result<Self::Answer, io::Error>> + Send + 'a>>;
+    type Answer = Vec<io::Result<Vec<u8>>>;
+    type Query<'a> = Pin<Box<dyn Future<Output = io::Result<Self::Answer>> + Send + 'a>>;
 
     fn lookup_txt(&self, domain: &str) -> Self::Query<'_> {
-        let result = Dname::from_str(domain);
+        let dname = Dname::vec_from_str(domain);
+
         Box::pin(async move {
-            let dname = result.map_err(|_| io::Error::from(ErrorKind::InvalidInput))?;
-            self.lookup_txt_internal(dname).await
+            let dname = dname.map_err(|_| ErrorKind::InvalidInput)?;
+
+            let answer = self.resolver.query((dname, Rtype::Txt)).await?;
+
+            if answer.is_error() {
+                return Err(match answer.header().rcode() {
+                    Rcode::NXDomain => ErrorKind::NotFound.into(),
+                    rcode => io::Error::new(ErrorKind::Other, rcode.to_string()),
+                });
+            }
+
+            let txts = answer
+                .answer()
+                .map_err(|_| ErrorKind::InvalidData)?
+                .limit_to::<Txt<_>>();
+
+            let results = txts
+                .map(|r| match r {
+                    Ok(record) => {
+                        let txt = record.into_data().text().unwrap();
+                        Ok(normalize_line_breaks(txt))
+                    }
+                    Err(_) => Err(ErrorKind::InvalidData.into()),
+                })
+                .collect();
+
+            Ok(results)
         })
+    }
+}
+
+// There are key records that mistakenly use LF + WSP as line breaks, seen for
+// example at mail._domainkey.circleshop.ch. Be nice and normalise to valid
+// CRLF + WSP.
+fn normalize_line_breaks(bytes: Vec<u8>) -> Vec<u8> {
+    bstr::join(
+        "\r\n",
+        bytes.split_str("\r\n").flat_map(|b| b.split_str("\n")),
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn normalize_line_breaks_ok() {
+        let record = b"v=1;\r\n\tw=2;\n\t;x=3".to_vec();
+        assert_eq!(normalize_line_breaks(record), b"v=1;\r\n\tw=2;\r\n\t;x=3");
     }
 }
