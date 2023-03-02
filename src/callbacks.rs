@@ -1,6 +1,5 @@
 use crate::{config::Config, session::Session};
 use byte_strings::c_str;
-use bytes::Bytes;
 use indymilter::{
     Actions, Callbacks, Context, EomContext, MacroStage, Macros, NegotiateContext, ProtoOpts,
     SocketInfo, Status,
@@ -117,7 +116,7 @@ async fn handle_eoh(context: &mut Context<Session>) -> Status {
     }
 }
 
-async fn handle_body(context: &mut Context<Session>, chunk: Bytes) -> Status {
+async fn handle_body(context: &mut Context<Session>, chunk: impl AsRef<[u8]>) -> Status {
     let session = context.data.as_mut().unwrap();
     let id = context.macros.queue_id();
 

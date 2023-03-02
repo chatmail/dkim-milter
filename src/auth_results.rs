@@ -1,87 +1,7 @@
 use crate::session;
 use std::fmt::Write;
 use tracing::debug;
-use viadkim::{
-    crypto::VerificationError,
-    signature::DkimSignatureErrorKind,
-    verifier::{VerificationResult, VerificationStatus, VerifierError},
-};
-
-pub enum AuthResultsKind {
-    Pass,
-    Policy,
-    Fail,
-    Neutral,
-    Permerror,
-    Temperror,
-}
-
-impl AuthResultsKind {
-    pub fn to_str(&self) -> &'static str {
-        match self {
-            Self::Pass => "pass",
-            Self::Policy => "policy",
-            Self::Fail => "fail",
-            Self::Neutral => "neutral",
-            Self::Permerror => "permerror",
-            Self::Temperror => "temperror",
-        }
-    }
-}
-
-// TODO move classification to viadkim?
-pub fn auth_results_kind_from_status(status: &VerificationStatus) -> AuthResultsKind {
-    use VerifierError::*;
-
-    match status {
-        VerificationStatus::Success => AuthResultsKind::Pass,
-        VerificationStatus::Failure(error) => match error {
-            WrongKeyType
-            | KeyRecordSyntax
-            | DisallowedHashAlgorithm
-            | DisallowedServiceType
-            | DomainMismatch
-            | InsufficientBodyLength
-            | InvalidKeyDomain
-            | NoKeyFound => AuthResultsKind::Permerror,
-            BodyHashMismatch => AuthResultsKind::Fail,
-            KeyLookupTimeout
-            | KeyLookup => AuthResultsKind::Temperror,
-            DkimSignatureHeaderFormat(error) => match &error.kind {
-                DkimSignatureErrorKind::MissingVersionTag
-                | DkimSignatureErrorKind::HistoricAlgorithm
-                | DkimSignatureErrorKind::MissingAlgorithmTag
-                | DkimSignatureErrorKind::MissingSignatureTag
-                | DkimSignatureErrorKind::MissingBodyHashTag
-                | DkimSignatureErrorKind::InvalidDomain
-                | DkimSignatureErrorKind::MissingDomainTag
-                | DkimSignatureErrorKind::SignedHeadersEmpty
-                | DkimSignatureErrorKind::FromHeaderNotSigned
-                | DkimSignatureErrorKind::MissingSignedHeadersTag
-                | DkimSignatureErrorKind::InvalidBodyLength
-                | DkimSignatureErrorKind::InvalidSelector
-                | DkimSignatureErrorKind::MissingSelectorTag
-                | DkimSignatureErrorKind::InvalidTimestamp
-                | DkimSignatureErrorKind::InvalidExpiration
-                | DkimSignatureErrorKind::DomainMismatch
-                | DkimSignatureErrorKind::ExpirationNotAfterTimestamp
-                | DkimSignatureErrorKind::InvalidUserId => AuthResultsKind::Permerror,
-                DkimSignatureErrorKind::UnsupportedVersion
-                | DkimSignatureErrorKind::UnsupportedAlgorithm
-                | DkimSignatureErrorKind::UnsupportedCanonicalization
-                | DkimSignatureErrorKind::QueryMethodsNotSupported
-                | DkimSignatureErrorKind::ValueSyntax
-                | DkimSignatureErrorKind::InvalidTagList => AuthResultsKind::Neutral,
-            },
-            VerificationFailure(error) => match error {
-                VerificationError::InvalidKey
-                | VerificationError::InsufficientKeySize
-                | VerificationError::InvalidSignature => AuthResultsKind::Permerror,
-                VerificationError::VerificationFailure => AuthResultsKind::Fail,
-            },
-        },
-    }
-}
+use viadkim::verifier::{VerificationResult, VerificationStatus};
 
 pub fn auth_results_reason_from_status(status: &VerificationStatus) -> Option<String> {
     match status {
@@ -101,10 +21,9 @@ pub fn assemble_auth_results(authserv_id: &str, sigs: Vec<VerificationResult>) -
 
         result.push_str(";\n\t");
 
-        let ar = auth_results_kind_from_status(&sig.status);
+        let ar = sig.status.to_auth_results_kind();
 
-        result.push_str("dkim=");
-        result.push_str(ar.to_str());
+        write!(result, "dkim={ar}").unwrap();
 
         if let Some(reason) = auth_results_reason_from_status(&sig.status) {
             write!(result, " reason=\"{reason}\"").unwrap();

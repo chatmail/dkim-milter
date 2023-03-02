@@ -13,7 +13,6 @@ exclude = ["/.gitignore"]
 [dependencies]
 bstr = { version = "1.2.0", default-features = false, features = ["std"] }
 byte-strings = "0.2.2"
-bytes = "1.4.0"
 domain = { version = "0.7.1", features = ["resolv"] }
 futures = "0.3.26"
 idna = "0.3.0"
@@ -27,8 +26,11 @@ tokio = { version = "1.25.0", features = ["fs", "macros", "net", "rt", "rt-multi
 tracing = "0.1.37"
 tracing-journald = "0.3.0"
 tracing-subscriber = { version = "0.3.16", features = ["env-filter"] }
-#viadkim = { path = "../viadkim", default-features = false }
-viadkim = "0.0.2"
+viadkim = { path = "../viadkim" }
+#viadkim = "0.0.2"
 
 [dev-dependencies]
 indymilter-test = "0.0.3"
+
+[features]
+sha1 = ["viadkim/sha1"]

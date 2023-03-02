@@ -183,7 +183,7 @@ impl Session {
             let signing_key = self.config.signing_keys.get(&key_name).unwrap();
 
             let key_type = signing_key.to_key_type();
-            let signature_alg = SignatureAlgorithm::from((key_type, HashAlgorithm::Sha256));
+            let signature_alg = SignatureAlgorithm::from_parts(key_type, HashAlgorithm::Sha256).unwrap();
 
             let mut request = SigningRequest::new(domain, selector, signature_alg, signing_key.clone());
 
@@ -269,12 +269,10 @@ impl Session {
 
                 for sig in &sigs {
                     // TODO
-                    let result = auth_results::auth_results_kind_from_status(&sig.status).to_str();
-
                     info!(
                         "{id}: verified signature from {}: {}",
                         get_domain_from_verification_result(sig),
-                        result
+                        sig.status.to_auth_results_kind()
                     );
                 }
 

@@ -2,7 +2,6 @@ mod common;
 
 pub use common::*;
 
-use bytes::Bytes;
 use dkim_milter::*;
 use indymilter::MacroStage;
 use indymilter_test::*;
@@ -55,7 +54,7 @@ a loopback address?
 Thank you,
 ";
     let body = body.replace('\n', "\r\n");
-    let status = conn.body(Bytes::from(body)).await.unwrap();
+    let status = conn.body(body).await.unwrap();
     assert_eq!(status, Status::Continue);
 
     let (actions, status) = conn.eom().await.unwrap();

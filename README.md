@@ -38,6 +38,10 @@ alpha quality).
 
 A source checkout of viadkim in a sibling directory is also required.
 
+During building and installation the option `--features sha1` can be specified
+to enable support for the insecure, historic SHA-1 hash algorithm. Use of this
+feature is strongly discouraged.
+
 ## Usage
 
 TODO
@@ -51,9 +55,9 @@ sender*, then the message is signed. In all other cases, the message is verified
 instead.
 
 The supported signature algorithms, for both signing and verifying, are
-`rsa-sha256` and `ed25519-sha256`. The historic signature algorithm `rsa-sha1`
-is not supported, evaluation of such signatures yields a *permerror* result (RFC
-8301).
+`rsa-sha256` and `ed25519-sha256`. By default, the historic signature algorithm
+`rsa-sha1` is not supported, evaluation of such signatures yields a *permerror*
+result (RFC 8301; but see feature `sha1` above).
 
 ## Configuration
 
@@ -82,7 +86,8 @@ The sender expression `example.org` matches senders with that domain
 with that domain and also subdomains (`me@subdomain.example.org`). Caution:
 *Every* matching sender expression results in an additional DKIM signature for
 the message. In above example, messages from `me@example.org` are signed with
-two keys.
+two keys. (Multiple signatures are primarily useful for double-signing with both
+an Ed25519 and an RSA key.)
 
 The keys named in the fourth column in `signing_senders` are listed in the file
 configured in `signing_keys`:
