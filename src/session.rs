@@ -1,21 +1,21 @@
 use crate::{
     auth_results,
-    config::{Config, SignatureConfig, SigningSenders, OperationMode},
+    config::{Config, OperationMode, SignatureConfig, SigningSenders},
     format::{self, EmailAddr},
     resolver::Resolver,
 };
 use bstr::ByteSlice;
 use indymilter::{ContextActions, Status};
-use std::{borrow::Cow, cmp, error::Error, mem, net::IpAddr, sync::Arc};
+use std::{borrow::Cow, cmp, collections::HashSet, error::Error, mem, net::IpAddr, sync::Arc};
 use tracing::{debug, error, info};
 use viadkim::{
-    canonicalize::BodyCanonStatus,
     crypto::HashAlgorithm,
     header::{FieldBody, FieldName, HeaderFields},
-    signature::{self, DomainName, Selector, SignatureAlgorithm},
-    signer::SigningStatus,
-    verifier::{VerificationResult, VerificationStatus, VerifierError},
-    Signer, SigningKey, SigningRequest, Verifier,
+    message_hash::BodyHasherStance,
+    signature::{DomainName, Selector, SignatureAlgorithm},
+    signer::{self, BodyLength, HeaderSelection, OversignStrategy, SignRequest, SigningStatus},
+    verifier::{self, VerificationResult, VerificationStatus, VerifierError},
+    Signer, SigningKey, Verifier,
 };
 
 #[derive(Default)]
@@ -39,6 +39,7 @@ pub struct Session {
     pub hostname: Option<String>,
 
     pub auth: bool,
+    header_bytes: usize,
     from_address: Option<Result<EmailAddr, FromAddrError>>,
 
     mode: Mode,
@@ -55,6 +56,7 @@ impl Session {
             hostname: None,
 
             auth: false,
+            header_bytes: 0,
             from_address: None,
 
             mode: Mode::Inactive,
@@ -67,6 +69,7 @@ impl Session {
         // TODO align abort and eom
         // reset everything except config, and connect-stage values ip and hostname
         self.auth = false;
+        self.header_bytes = 0;
         self.from_address = None;
         self.mode = Mode::Inactive;
         self.headers = vec![];
@@ -80,6 +83,16 @@ impl Session {
     ) -> Result<Status, Box<dyn Error>> {
         // convert milter newlines to SMTP CRLF
         let value = value.replace("\n", "\r\n");
+
+        // count and limit amount of header data that can be accumulated (DoS)
+        const MAX_HEADER_LEN: usize = 512_000;
+
+        // name + ':' + value + CRLF
+        self.header_bytes = self.header_bytes.saturating_add(name.len() + value.len() + 3);
+        if self.header_bytes > MAX_HEADER_LEN {
+            debug!("{id}: too much header data");
+            return Err("too much header data".into());
+        }
 
         // extract From header
         if name.eq_ignore_ascii_case("From") {
@@ -149,8 +162,10 @@ impl Session {
                 } else {
                     if self.config.mode == OperationMode::Auto {
                         debug!("{id}: verifying mode");
-                        let verifier = self.prepare_verifier(headers).await?;
-                        Mode::Verifying(verifier)
+                        match self.prepare_verifier(headers).await {
+                            Some(verifier) => Mode::Verifying(verifier),
+                            None => Mode::Inactive,
+                        }
                     } else {
                         Mode::Inactive
                     }
@@ -158,8 +173,10 @@ impl Session {
             }
             OperationMode::Verify => {
                 debug!("{id}: verifying mode");
-                let verifier = self.prepare_verifier(headers).await?;
-                self.mode = Mode::Verifying(verifier);
+                self.mode = match self.prepare_verifier(headers).await {
+                    Some(verifier) => Mode::Verifying(verifier),
+                    None => Mode::Inactive,
+                };
             }
         }
 
@@ -173,7 +190,7 @@ impl Session {
     ) -> Result<Signer<Arc<SigningKey>>, Box<dyn Error>> {
         assert!(!matches.is_empty());
 
-        // step through matches and create SigningRequest for each match
+        // step through matches and create SignRequest for each match
 
         let mut requests = vec![];
         for match_ in matches {
@@ -182,16 +199,26 @@ impl Session {
             let key_name = match_.key_name;
             let signing_key = self.config.signing_keys.get(&key_name).unwrap();
 
-            let key_type = signing_key.to_key_type();
+            let key_type = signing_key.key_type();
             let signature_alg = SignatureAlgorithm::from_parts(key_type, HashAlgorithm::Sha256).unwrap();
 
-            let mut request = SigningRequest::new(domain, selector, signature_alg, signing_key.clone());
+            let mut request = SignRequest::new(domain, selector, signature_alg, signing_key.clone());
 
             let tmp_config = match_.signature_config.as_ref().unwrap_or(&self.config.signature_config);
 
             request.canonicalization = tmp_config.canonicalization;
-            request.oversigned_headers = vec![FieldName::new("From").unwrap()];
-            // request.copy_headers = true;
+            request.copy_headers = tmp_config.copy_headers;
+            if tmp_config.limit_body_length {
+                request.body_length = BodyLength::OnlyMessageLength;
+            }
+
+            let mut signed_headers: HashSet<_> = signer::get_default_signed_headers().into_iter().collect();
+            signed_headers.insert(FieldName::new("Message-ID").unwrap());
+            let oversigned_headers = HashSet::from([FieldName::new("From").unwrap()]);
+            request.header_selection = HeaderSelection::Pick {
+                include: signed_headers,
+                oversign: OversignStrategy::Selected(oversigned_headers),
+            };
 
             requests.push(request);
         }
@@ -202,13 +229,17 @@ impl Session {
         Ok(signer)
     }
 
-    async fn prepare_verifier(&mut self, headers: HeaderFields) -> Result<Verifier, Box<dyn Error>> {
+    async fn prepare_verifier(&mut self, headers: HeaderFields) -> Option<Verifier> {
         let resolver = Resolver::new();
-        let config = Default::default();
 
-        let verifier = Verifier::process_headers(&resolver, &headers, &config).await;
+        let fail_if_expired = self.config.fail_if_expired;
 
-        Ok(verifier)
+        let config = verifier::Config {
+            fail_if_expired,
+            ..Default::default()
+        };
+
+        Verifier::process_headers(&resolver, &headers, &config).await
     }
 
     pub fn process_body_chunk(&mut self, chunk: &[u8]) -> Result<Status, Box<dyn Error>> {
@@ -222,7 +253,7 @@ impl Session {
             }
         };
 
-        Ok(if let BodyCanonStatus::Done = status {
+        Ok(if let BodyHasherStance::Done = status {
             Status::Skip
         } else {
             Status::Continue
@@ -349,7 +380,7 @@ pub fn get_domain_from_verification_result(res: &VerificationResult) -> String {
 pub fn get_signature_prefix_from_verification_result(res: &VerificationResult) -> Option<String> {
     match &res.signature {
         Some(sig) => {
-            let s = signature::encode_binary(&sig.signature_data);
+            let s = viadkim::encode_binary(&sig.signature_data);
             let s = &s[..(cmp::min(8, s.len()))];
             Some(s.into())
         }

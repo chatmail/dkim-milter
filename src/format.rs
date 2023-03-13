@@ -101,7 +101,7 @@ pub fn parse_header_from_address(input: &[u8]) -> Result<EmailAddr, ParseHeaderF
     match mbox.domain_part {
         DomainPart::Domain(s) => {
             // validate domain name, see RFC 5322, §3.4.1
-            let domain = DomainName::new(&s).map_err(|_| ParseHeaderFromError::InvalidDomain)?;
+            let domain = DomainName::new(s).map_err(|_| ParseHeaderFromError::InvalidDomain)?;
             Ok(EmailAddr {
                 local_part: mbox.local_part,
                 domain,

@@ -13,8 +13,9 @@
 TODO
 
 DKIM Milter is a milter application that signs or verifies email messages using
-the *DomainKeys Identified Mail* (DKIM) protocol. DKIM is specified in [RFC
-6376].
+the *DomainKeys Identified Mail* (DKIM) protocol. It is meant to be integrated
+with a milter-capable MTA (mail server) such as [Postfix]. DKIM is specified in
+[RFC 6376].
 
 DKIM milter is based on the [viadkim] library. Therefore, it inherits the
 approach to DKIM used in that library. For example, it is lenient with regard to
@@ -26,6 +27,7 @@ DKIM Milter can be used as a simple alternative to the OpenDKIM milter. Credit
 goes to that project, of which I have been a long-time happy user and which has
 inspired some choices made here.
 
+[Postfix]: https://www.postfix.org
 [RFC 6376]: https://www.rfc-editor.org/rfc/rfc6376
 [viadkim]: https://crates.io/crates/viadkim
 
@@ -104,6 +106,9 @@ automatically.
 
 Additional per-signature (ie, per sender expression match) configuration
 overrides are in `signature_settings` (not implemented).
+
+Logging must currently be requested by setting environment variable
+`RUST_LOG=info`.
 
 ## Key setup
 

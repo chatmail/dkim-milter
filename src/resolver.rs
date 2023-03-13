@@ -66,8 +66,16 @@ impl LookupTxt for Resolver {
 
 // There are key records that mistakenly use LF + WSP as line breaks, seen for
 // example at mail._domainkey.circleshop.ch. Be nice and normalise to valid
-// CRLF + WSP.
-fn normalize_line_breaks(bytes: Vec<u8>) -> Vec<u8> {
+// CRLF + WSP. Also trim trailing WSP, which is not allowed after semicolon.
+fn normalize_line_breaks(mut bytes: Vec<u8>) -> Vec<u8> {
+    while let Some(b) = bytes.last() {
+        if matches!(b, b' ' | b'\t') {
+            bytes.pop();
+        } else {
+            break;
+        }
+    }
+
     bstr::join(
         "\r\n",
         bytes.split_str("\r\n").flat_map(|b| b.split_str("\n")),
@@ -80,7 +88,7 @@ mod tests {
 
     #[test]
     fn normalize_line_breaks_ok() {
-        let record = b"v=1;\r\n\tw=2;\n\t;x=3".to_vec();
-        assert_eq!(normalize_line_breaks(record), b"v=1;\r\n\tw=2;\r\n\t;x=3");
+        let record = b"v=1;\r\n\tw=2;\n\t;x=3; ".to_vec();
+        assert_eq!(normalize_line_breaks(record), b"v=1;\r\n\tw=2;\r\n\t;x=3;");
     }
 }

@@ -140,9 +140,12 @@ pub struct LogConfig {
     pub log_destination: LogDestination,
 }
 
+// TODO Rename SigningConfig ?
 #[derive(Clone, Debug, PartialEq)]
 pub struct SignatureConfig {
     pub canonicalization: Canonicalization,
+    pub copy_headers: bool,
+    pub limit_body_length: bool,
 }
 
 // TODO provisional
@@ -153,6 +156,8 @@ pub struct Config {
     pub signing_keys: HashMap<String, Arc<SigningKey>>,
 
     pub authserv_id: Option<String>,
+
+    pub fail_if_expired: bool,
 
     pub signature_config: SignatureConfig,
 
@@ -169,7 +174,10 @@ impl Config {
         let mut signing_keys_file = None;
         let mut signing_senders_file = None;
         let mut authserv_id = None;
+        let mut fail_if_expired = None;
         let mut canonicalization = None;
+        let mut copy_headers = None;
+        let mut limit_body_length = None;
         let mut mode = None;
 
         let mut keys_seen = HashSet::new();
@@ -206,10 +214,25 @@ impl Config {
                         "authserv_id" => {
                             authserv_id = Some(v.to_owned());
                         }
+                        "fail_if_expired" => {
+                            let value = parse_boolean(v)
+                                .map_err(|_| io::Error::new(ErrorKind::Other, "invalid fail_if_expired value"))?;
+                            fail_if_expired = Some(value);
+                        }
                         "canonicalization" => {
                             let value = Canonicalization::from_str(v)
                                 .map_err(|_| io::Error::new(ErrorKind::Other, "invalid canonicalization"))?;
                             canonicalization = Some(value);
+                        }
+                        "copy_headers" => {
+                            let value = parse_boolean(v)
+                                .map_err(|_| io::Error::new(ErrorKind::Other, "invalid copy_headers value"))?;
+                            copy_headers = Some(value);
+                        }
+                        "limit_body_length" => {
+                            let value = parse_boolean(v)
+                                .map_err(|_| io::Error::new(ErrorKind::Other, "invalid limit_body_length value"))?;
+                            limit_body_length = Some(value);
                         }
                         "mode" => {
                             let value = OperationMode::from_str(v)
@@ -250,9 +273,14 @@ impl Config {
         });
 
         let mode = mode.unwrap_or_default();
+        let fail_if_expired = fail_if_expired.unwrap_or(true);
+        let copy_headers = copy_headers.unwrap_or_default();
+        let limit_body_length = limit_body_length.unwrap_or_default();
 
         let signature_config = SignatureConfig {
             canonicalization,
+            copy_headers,
+            limit_body_length,
         };
 
         let config = Config {
@@ -260,11 +288,20 @@ impl Config {
             signing_senders,
             signing_keys: key_store,
             authserv_id,
+            fail_if_expired,
             signature_config,
             mode,
         };
 
         Ok(config)
+    }
+}
+
+fn parse_boolean(s: &str) -> Result<bool, ()> {
+    match s {
+        "yes" | "true" => Ok(true),
+        "no" | "false" => Ok(false),
+        _ => Err(()),
     }
 }
 
