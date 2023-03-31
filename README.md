@@ -49,12 +49,17 @@ feature is strongly discouraged.
 TODO
 
 For all messages passed to this milter, the decision whether the message should
-undergo verification or signing is made in the following way: If the message
-comes from a local IP address or is submitted by an authenticated sender then
-the message is *authorised* for signing; if the message is authorised and the
-email address in the message’s *From* header matches a configured *signing
-sender*, then the message is signed. In all other cases, the message is verified
-instead.
+undergo verification or signing is made in the following way.
+
+If a message comes from an *authorised* source and is submitted by an
+*originator* that matches a configured *signing sender*, then the message is
+signed; in all other cases, the message is verified instead. A message is
+*authorised* if it comes from a local IP address or is submitted by an
+authenticated sender. The *originator* of a message is taken from the message’s
+*Sender* header if present, else from the message’s *From* header.
+
+Some of the above will be made configurable in the future. The operating mode
+can also be configured with the `mode` parameter.
 
 The supported signature algorithms, for both signing and verifying, are
 `rsa-sha256` and `ed25519-sha256`. By default, the historic signature algorithm

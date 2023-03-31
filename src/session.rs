@@ -31,48 +31,70 @@ enum FromAddrError {
     Multiple,
 }
 
-// TODO
+#[derive(Default)]
+struct ConnectionData {
+    ip: Option<IpAddr>,
+    hostname: Option<String>,
+}
+
+impl ConnectionData {
+    fn new() -> Self {
+        Default::default()
+    }
+}
+
+#[derive(Default)]
+struct MessageData {
+    auth: bool,
+    recipients: Vec<String>,
+    header_bytes: usize,
+    sender_address: Option<Result<EmailAddr, FromAddrError>>,
+    from_addresses: Option<Result<Vec<EmailAddr>, FromAddrError>>,
+    mode: Mode,
+    headers: Vec<(FieldName, FieldBody)>,
+}
+
+impl MessageData {
+    fn new() -> Self {
+        Default::default()
+    }
+}
+
 pub struct Session {
     config: Arc<Config>,
 
-    pub ip: Option<IpAddr>,
-    pub hostname: Option<String>,
-
-    pub auth: bool,
-    header_bytes: usize,
-    from_address: Option<Result<EmailAddr, FromAddrError>>,
-
-    mode: Mode,
-
-    headers: Vec<(FieldName, FieldBody)>,
+    conn: ConnectionData,
+    message: Option<MessageData>,
 }
 
 impl Session {
     pub fn new(config: Arc<Config>) -> Self {
         Self {
             config,
-
-            ip: None,
-            hostname: None,
-
-            auth: false,
-            header_bytes: 0,
-            from_address: None,
-
-            mode: Mode::Inactive,
-
-            headers: vec![],
+            conn: ConnectionData::new(),
+            message: None,
         }
     }
 
+    pub fn init_connection(&mut self, ip: Option<IpAddr>, hostname: impl Into<String>) {
+        self.conn.ip = ip;
+        self.conn.hostname = Some(hostname.into());
+    }
+
+    pub fn init_message(&mut self) {
+        self.message = Some(MessageData::new());
+    }
+
+    pub fn set_authenticated(&mut self) {
+        self.message.as_mut().unwrap().auth = true;
+    }
+
+    pub fn add_recipient(&mut self, rcpt: String) {
+        self.message.as_mut().unwrap().recipients.push(rcpt);
+    }
+
     pub fn abort_message(&mut self) {
-        // TODO align abort and eom
-        // reset everything except config, and connect-stage values ip and hostname
-        self.auth = false;
-        self.header_bytes = 0;
-        self.from_address = None;
-        self.mode = Mode::Inactive;
-        self.headers = vec![];
+        self.message = None;
     }
 
     pub fn handle_header(
@@ -81,6 +103,11 @@ impl Session {
         name: Cow<'_, str>,
         value: Vec<u8>,
     ) -> Result<Status, Box<dyn Error>> {
+        let message = match self.message.as_mut() {
+            Some(message) => message,
+            None => return Err("message context not available".into()),
+        };
+
         // convert milter newlines to SMTP CRLF
         let value = value.replace("\n", "\r\n");
 
@@ -88,26 +115,43 @@ impl Session {
         const MAX_HEADER_LEN: usize = 512_000;
 
         // name + ':' + value + CRLF
-        self.header_bytes = self.header_bytes.saturating_add(name.len() + value.len() + 3);
-        if self.header_bytes > MAX_HEADER_LEN {
+        message.header_bytes = message.header_bytes.saturating_add(name.len() + value.len() + 3);
+        if message.header_bytes > MAX_HEADER_LEN {
             debug!("{id}: too much header data");
             return Err("too much header data".into());
         }
 
+        // extract Sender header
+        if name.eq_ignore_ascii_case("Sender") {
+            if message.sender_address.is_some() {
+                debug!("{id}: repeated Sender header field, ignoring Sender");
+                message.sender_address = Some(Err(FromAddrError::Multiple));
+            } else {
+                match format::parse_header_sender_address(&value) {
+                    Ok(addr) => {
+                        message.sender_address = Some(Ok(addr));
+                    }
+                    Err(e) => {
+                        debug!("{id}: unusable Sender header field: {e:?}");
+                        message.sender_address = Some(Err(FromAddrError::Syntax));
+                    }
+                }
+            }
+        }
+
         // extract From header
         if name.eq_ignore_ascii_case("From") {
-            if self.from_address.is_some() {
-                // if there was a From already, there are now multiple: invalidate
+            if message.from_addresses.is_some() {
                 debug!("{id}: repeated From header field, ignoring From");
-                self.from_address = Some(Err(FromAddrError::Multiple));
+                message.from_addresses = Some(Err(FromAddrError::Multiple));
             } else {
-                match format::parse_header_from_address(&value) {
+                match format::parse_header_from_addresses(&value) {
                     Ok(addr) => {
-                        self.from_address = Some(Ok(addr));
+                        message.from_addresses = Some(Ok(addr));
                     }
                     Err(e) => {
                         debug!("{id}: unusable From header field: {e:?}");
-                        self.from_address = Some(Err(FromAddrError::Syntax));
+                        message.from_addresses = Some(Err(FromAddrError::Syntax));
                     }
                 }
             }
@@ -115,14 +159,19 @@ impl Session {
 
         // update header fields, ignore unusable inputs
         if let (Ok(name), Ok(value)) = (FieldName::new(name), FieldBody::new(value)) {
-            self.headers.push((name, value));
+            message.headers.push((name, value));
         }
 
         Ok(Status::Continue)
     }
 
     pub async fn prepare_processing(&mut self, id: &str) -> Result<Status, Box<dyn Error>> {
-        let headers = mem::take(&mut self.headers);
+        let message = match self.message.as_mut() {
+            Some(message) => message,
+            None => return Err("message context not available".into()),
+        };
+
+        let headers = mem::take(&mut message.headers);
         let headers = match HeaderFields::new(headers) {
             Ok(h) => h,
             Err(e) => {
@@ -135,27 +184,37 @@ impl Session {
         match self.config.mode {
             OperationMode::Auto | OperationMode::Sign => {
                 // local and authenticated senders are authorised
-                let authzd = self.ip.filter(|i| i.is_loopback()).is_some() || self.auth;
+                let authzd = self.conn.ip.filter(|i| i.is_loopback()).is_some() || message.auth;
 
-                let from_address = match &self.from_address {
-                    Some(Ok(from_address)) => {
-                        debug!("{id}: From address is: {from_address}");
-                        Some(from_address)
-                    }
-                    _ => {
-                        debug!("{id}: no usable From header field in message");
-                        None
+                let sender = match &message.sender_address {
+                    Some(Ok(sender_addr)) => Some(sender_addr),
+                    Some(Err(_)) => None,
+                    None => {
+                        // fall back to From
+                        match &message.from_addresses {
+                            Some(Ok(from_addresses)) => {
+                                if from_addresses.len() > 1 {
+                                    None
+                                } else {
+                                    Some(from_addresses.first().unwrap())
+                                }
+                            }
+                            Some(Err(_)) | None => None,
+                        }
                     }
                 };
 
                 // TODO find matches in SigningSenders
-                let matches = match from_address {
-                    Some(from_address) => find_matching_senders(&self.config.signing_senders, from_address),
+                let matches = match sender {
+                    Some(sender) => {
+                        debug!("{id}: using sender address: {sender}");
+                        find_matching_senders(&self.config.signing_senders, sender)
+                    }
                     None => vec![],
                 };
 
                 // signing mode if authorised and right domain to sign in From
-                self.mode = if authzd && !matches.is_empty() {
+                let mode = if authzd && !matches.is_empty() {
                     debug!("{id}: signing mode");
                     let signer = self.prepare_signer(headers, matches)?;
                     Mode::Signing(signer)
@@ -170,13 +229,19 @@ impl Session {
                         Mode::Inactive
                     }
                 };
+
+                let message = self.message.as_mut().unwrap();
+                message.mode = mode;
             }
             OperationMode::Verify => {
                 debug!("{id}: verifying mode");
-                self.mode = match self.prepare_verifier(headers).await {
+                let mode = match self.prepare_verifier(headers).await {
                     Some(verifier) => Mode::Verifying(verifier),
                     None => Mode::Inactive,
                 };
+
+                let message = self.message.as_mut().unwrap();
+                message.mode = mode;
             }
         }
 
@@ -239,11 +304,16 @@ impl Session {
             ..Default::default()
         };
 
-        Verifier::process_headers(&resolver, &headers, &config).await
+        Verifier::process_header(&resolver, &headers, &config).await
     }
 
     pub fn process_body_chunk(&mut self, chunk: &[u8]) -> Result<Status, Box<dyn Error>> {
-        let status = match &mut self.mode {
+        let message = match self.message.as_mut() {
+            Some(message) => message,
+            None => return Err("message context not available".into()),
+        };
+
+        let status = match &mut message.mode {
             Mode::Inactive => return Ok(Status::Skip),
             Mode::Signing(signer) => {
                 signer.body_chunk(chunk)
@@ -265,7 +335,12 @@ impl Session {
         id: &str,
         actions: &impl ContextActions,
     ) -> Result<Status, Box<dyn Error>> {
-        match mem::take(&mut self.mode) {
+        let message = match self.message.take() {
+            Some(message) => message,
+            None => return Err("message context not available".into()),
+        };
+
+        match message.mode {
             Mode::Inactive => {}
             Mode::Signing(signer) => {
                 let sigs = signer.finish().await;
@@ -320,9 +395,6 @@ impl Session {
                 }
             }
         }
-
-        // TODO reset to beginning of per-message handling
-        self.abort_message();
 
         Ok(Status::Continue)
     }

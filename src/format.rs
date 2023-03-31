@@ -51,7 +51,7 @@ pub enum DomainPart {
 #[derive(Debug, PartialEq, Eq)]
 pub enum ParseHeaderFromError {
     // InvalidUtf8,  // get rid of this?
-    MultipleAddrs,
+    // MultipleAddrs,
     DomainLiteral,
     Syntax,
     InvalidDomain,
@@ -83,20 +83,13 @@ pub enum ParseHeaderFromError {
 
 // work on bytes, and do lenient (but not insecure) parsing, allowing ill-formed
 // but occasionally seen Latin1 et al in a header field value
-pub fn parse_header_from_address(input: &[u8]) -> Result<EmailAddr, ParseHeaderFromError> {
-    let (mboxes, rest) = parse_mailboxes(input).ok_or(ParseHeaderFromError::Syntax)?;
+
+pub fn parse_header_sender_address(input: &[u8]) -> Result<EmailAddr, ParseHeaderFromError> {
+    let (mbox, rest) = parse_mailbox(input).ok_or(ParseHeaderFromError::Syntax)?;
 
     if !rest.is_empty() {
         return Err(ParseHeaderFromError::Syntax);
     }
-
-    let mboxes = mboxes.0;
-
-    if mboxes.len() > 1 {
-        return Err(ParseHeaderFromError::MultipleAddrs);
-    }
-
-    let mbox = mboxes.into_iter().next().unwrap();
 
     match mbox.domain_part {
         DomainPart::Domain(s) => {
@@ -109,6 +102,35 @@ pub fn parse_header_from_address(input: &[u8]) -> Result<EmailAddr, ParseHeaderF
         }
         DomainPart::DomainLiteral(_) => Err(ParseHeaderFromError::DomainLiteral),
     }
+}
+
+pub fn parse_header_from_addresses(input: &[u8]) -> Result<Vec<EmailAddr>, ParseHeaderFromError> {
+    let (mboxes, rest) = parse_mailboxes(input).ok_or(ParseHeaderFromError::Syntax)?;
+
+    if !rest.is_empty() {
+        return Err(ParseHeaderFromError::Syntax);
+    }
+
+    let mboxes = mboxes.0;
+
+    // if mboxes.len() > 1 {
+    //     return Err(ParseHeaderFromError::MultipleAddrs);
+    // }
+
+    mboxes.into_iter().map(|mbox| {
+        match mbox.domain_part {
+            DomainPart::Domain(s) => {
+                // validate domain name, see RFC 5322, §3.4.1
+                let domain = DomainName::new(s).map_err(|_| ParseHeaderFromError::InvalidDomain)?;
+                Ok(EmailAddr {
+                    local_part: mbox.local_part,
+                    domain,
+                })
+            }
+            // TODO allow domain literal when multiple addrs, b/c then not relevant!
+            DomainPart::DomainLiteral(_) => Err(ParseHeaderFromError::DomainLiteral),
+        }
+    }).collect()
 }
 
 fn parse_mailboxes(input: &[u8]) -> Option<(MailAddrs, &[u8])> {
@@ -470,16 +492,16 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parse_header_from_address_ok() {
+    fn parse_header_from_addresses_ok() {
         assert_eq!(
-            parse_header_from_address(b"  (all right:)\t \"let's see\" <does@this.work> "),
-            Ok(EmailAddr {
+            parse_header_from_addresses(b"  (all right:)\t \"let's see\" <does@this.work> "),
+            Ok(vec![EmailAddr {
                 local_part: "does".to_owned(),
                 domain: DomainName::new("this.work").unwrap(),
-            })
+            }])
         );
         assert_eq!(
-            parse_header_from_address(b"  (all right:)\t \"let's see\" <does@this.1213121> "),
+            parse_header_from_addresses(b"  (all right:)\t \"let's see\" <does@this.1213121> "),
             Err(ParseHeaderFromError::InvalidDomain)
         );
     }

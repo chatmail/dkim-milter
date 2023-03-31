@@ -27,6 +27,9 @@ async fn basic_sign_both() {
     let status = conn.mail(["<me@gluet.ch>"]).await.unwrap();
     assert_eq!(status, Status::Continue);
 
+    let status = conn.rcpt(["<postfix-users@postfix.org>"]).await.unwrap();
+    assert_eq!(status, Status::Continue);
+
     conn.macros(MacroStage::Data, [("i", "1234567ABC")]).await.unwrap();
 
     let status = conn.header("Date", "Fri, 18 Nov 2022 13:02:55 +0000").await.unwrap();

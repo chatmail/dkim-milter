@@ -28,6 +28,9 @@ async fn basic_verify_rsa() {
     let status = conn.mail(["<david@gluet.ch>"]).await.unwrap();
     assert_eq!(status, Status::Continue);
 
+    let status = conn.rcpt(["<postfix-users@postfix.org>"]).await.unwrap();
+    assert_eq!(status, Status::Continue);
+
     conn.macros(MacroStage::Data, [("i", "1234567ABC")]).await.unwrap();
 
     let status = conn.header("DKIM-Signature", "\
