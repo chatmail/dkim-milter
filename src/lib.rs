@@ -6,7 +6,8 @@ mod resolver;
 mod session;
 
 pub use crate::config::{
-    CliOptions, Config, LogDestination, ParseLogDestinationError, ParseSocketError, Socket,
+    model::{LogDestination, ParseLogDestinationError, ParseSocketError, Socket},
+    CliOptions, Config,
 };
 
 use indymilter::IntoListener;

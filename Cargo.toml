@@ -1,6 +1,6 @@
 [package]
 name = "dkim-milter"
-version = "0.0.2"
+version = "0.0.3"
 edition = "2021"
 rust-version = "1.65.0"
 description = "Milter for DKIM signing and verification"
@@ -11,23 +11,23 @@ repository = "https://gitlab.com/glts/dkim-milter"
 exclude = ["/.gitignore"]
 
 [dependencies]
-bstr = { version = "1.2.0", default-features = false, features = ["std"] }
+bstr = { version = "1.4.0", default-features = false, features = ["std"] }
 byte-strings = "0.2.2"
-domain = { version = "0.7.1", features = ["resolv"] }
-futures = "0.3.26"
+domain = { version = "0.7.2", features = ["resolv"] }
+futures = "0.3.27"
 idna = "0.3.0"  # do we still need this?
 indymilter = "0.2.0"
-ipnet = "2.7.1"
-once_cell = "1.17.0"
-regex = "1.7.1"
-signal-hook = "0.3.14"
+ipnet = "2.7.2"
+once_cell = "1.17.1"
+regex = "1.7.3"
+signal-hook = "0.3.15"
 signal-hook-tokio = { version = "0.3.1", features = ["futures-v0_3"] }
-tokio = { version = "1.25.0", features = ["fs", "macros", "net", "rt", "rt-multi-thread", "sync"] }
+tokio = { version = "1.26.0", features = ["fs", "macros", "net", "rt", "rt-multi-thread", "sync"] }
 tracing = "0.1.37"
 tracing-journald = "0.3.0"
 tracing-subscriber = { version = "0.3.16", features = ["env-filter"] }
-viadkim = { path = "../viadkim" }
-#viadkim = "0.0.2"
+#viadkim = { path = "../viadkim" }
+viadkim = "0.0.3"
 
 [dev-dependencies]
 indymilter-test = "0.0.3"

@@ -14,7 +14,7 @@ async fn basic_verify_rsa() {
 
     let mut opts = CliOptions::default();
     opts.config_file = "tests/dkim-milter.conf".into();
-    let config = Config::read(opts).await.unwrap();
+    let config = Config::read(&opts).await.unwrap();
 
     let milter = DkimMilter::spawn(config).await.unwrap();
 

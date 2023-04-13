@@ -13,7 +13,7 @@ async fn basic_sign_both() {
 
     let mut opts = CliOptions::default();
     opts.config_file = "tests/sign_both/dkim-milter.conf".into();
-    let config = Config::read(opts).await.unwrap();
+    let config = Config::read(&opts).await.unwrap();
 
     let milter = DkimMilter::spawn(config).await.unwrap();
 

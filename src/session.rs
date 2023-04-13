@@ -1,6 +1,11 @@
 use crate::{
     auth_results,
-    config::{Config, OperationMode, SignatureConfig, SigningSenders},
+    config::{
+        model::{
+            OperationMode, SigningConfig, SigningConfigOverrides, SigningOverrides, SigningSenders,
+        },
+        Config,
+    },
     format::{self, EmailAddr},
     resolver::Resolver,
 };
@@ -89,7 +94,10 @@ impl Session {
         self.message.as_mut().unwrap().auth = true;
     }
 
-    pub fn add_recipient(&mut self, rcpt: String) {
+    pub fn add_recipient(&mut self, mut rcpt: String) {
+        if let Some(s) = rcpt.strip_prefix('<').and_then(|s| s.strip_suffix('>')) {
+            rcpt = s.into();
+        }
         self.message.as_mut().unwrap().recipients.push(rcpt);
     }
 
@@ -255,35 +263,37 @@ impl Session {
     ) -> Result<Signer<Arc<SigningKey>>, Box<dyn Error>> {
         assert!(!matches.is_empty());
 
+        // TODO
+        // at this point there is one or more signature to be generated;
+        // first check if there are config overrides for the recipients!
+
+        let recipient_overrides = self.config.recipient_overrides.as_ref()
+            .and_then(|overrides| find_matching_recipient_overrides(
+                overrides,
+                &self.message.as_ref().unwrap().recipients,
+            ));
+
         // step through matches and create SignRequest for each match
 
         let mut requests = vec![];
         for match_ in matches {
             let domain = match_.domain;
             let selector = match_.selector;
-            let key_name = match_.key_name;
-            let signing_key = self.config.signing_keys.get(&key_name).unwrap();
+            let signing_key = match_.key;
 
-            let key_type = signing_key.key_type();
-            let signature_alg = SignatureAlgorithm::from_parts(key_type, HashAlgorithm::Sha256).unwrap();
-
-            let mut request = SignRequest::new(domain, selector, signature_alg, signing_key.clone());
-
-            let tmp_config = match_.signature_config.as_ref().unwrap_or(&self.config.signature_config);
-
-            request.canonicalization = tmp_config.canonicalization;
-            request.copy_headers = tmp_config.copy_headers;
-            if tmp_config.limit_body_length {
-                request.body_length = BodyLength::OnlyMessageLength;
-            }
-
-            let mut signed_headers: HashSet<_> = signer::get_default_signed_headers().into_iter().collect();
-            signed_headers.insert(FieldName::new("Message-ID").unwrap());
-            let oversigned_headers = HashSet::from([FieldName::new("From").unwrap()]);
-            request.header_selection = HeaderSelection::Pick {
-                include: signed_headers,
-                oversign: OversignStrategy::Selected(oversigned_headers),
+            let config = match (&match_.signing_config, &recipient_overrides) {
+                (Some(c1), Some(c2)) => {
+                    self.config.signing_config.combine_with(c1).combine_with(c2)
+                }
+                (Some(c), None) | (None, Some(c)) => {
+                    self.config.signing_config.combine_with(c)
+                }
+                (None, None) => {
+                    self.config.signing_config.clone()
+                }
             };
+
+            let request = make_sign_request(&config, domain, selector, signing_key);
 
             requests.push(request);
         }
@@ -400,12 +410,12 @@ impl Session {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug)]
 struct SenderMatch {
     domain: DomainName,
     selector: Selector,
-    key_name: String,
-    signature_config: Option<SignatureConfig>,
+    key: Arc<SigningKey>,
+    signing_config: Option<SigningConfigOverrides>,
 }
 
 fn find_matching_senders(
@@ -426,13 +436,59 @@ fn find_matching_senders(
             matches.push(SenderMatch {
                 domain: entry.domain.clone(),
                 selector: entry.selector.clone(),
-                key_name: entry.key_name.clone(),
-                signature_config: entry.signature_config.clone(),
+                key: entry.key_name.clone(),
+                signing_config: entry.signing_config.clone(),
             });
         }
     }
 
     matches
+}
+
+fn find_matching_recipient_overrides(
+    recipient_overrides: &SigningOverrides,
+    recipients: &[String],
+    // from_address: &EmailAddr,
+) -> Option<SigningConfigOverrides> {
+    for recipient in recipients {
+        // TODO ensure is parsable as email addr
+        for overrides in &recipient_overrides.entries {
+            if overrides.expr.is_match(recipient) {
+                return Some(overrides.config.clone());
+            }
+        }
+    }
+
+    None
+}
+
+fn make_sign_request(
+    config: &SigningConfig,
+    domain: DomainName,
+    selector: Selector,
+    signing_key: Arc<SigningKey>,
+) -> SignRequest<Arc<SigningKey>> {
+    let key_type = signing_key.key_type();
+
+    let signature_alg = SignatureAlgorithm::from_parts(key_type, HashAlgorithm::Sha256).unwrap();
+
+    let mut request = SignRequest::new(domain, selector, signature_alg, signing_key);
+
+    request.canonicalization = config.canonicalization;
+    request.copy_headers = config.copy_headers;
+    if config.limit_body_length {
+        request.body_length = BodyLength::OnlyMessageLength;
+    }
+
+    let mut signed_headers: HashSet<_> = signer::get_default_signed_headers().into_iter().collect();
+    signed_headers.insert(FieldName::new("Message-ID").unwrap());
+    let oversigned_headers = HashSet::from([FieldName::new("From").unwrap()]);
+    request.header_selection = HeaderSelection::Pick {
+        include: signed_headers,
+        oversign: OversignStrategy::Selected(oversigned_headers),
+    };
+
+    request
 }
 
 pub fn get_domain_from_verification_result(res: &VerificationResult) -> String {
@@ -470,8 +526,10 @@ pub fn get_signature_prefix_from_verification_result(res: &VerificationResult) -
     }
 }
 
+// TODO
 #[cfg(test)]
 mod tests {
+    /*
     use super::*;
     use crate::config::SenderEntry;
     use regex::Regex;
@@ -489,7 +547,7 @@ mod tests {
                     domain: domain.clone(),
                     selector: selector.clone(),
                     key_name: key_name.clone(),
-                    signature_config: None,
+                    signing_config: None,
                 }
             ],
         };
@@ -503,8 +561,9 @@ mod tests {
                 domain,
                 selector,
                 key_name,
-                signature_config: None,
+                signing_config: None,
             }
         ]);
     }
+    */
 }

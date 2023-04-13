@@ -48,18 +48,14 @@ feature is strongly discouraged.
 
 TODO
 
-For all messages passed to this milter, the decision whether the message should
-undergo verification or signing is made in the following way.
+Once installed, DKIM Milter can be started on the command-line as `dkim-milter`.
 
-If a message comes from an *authorised* source and is submitted by an
-*originator* that matches a configured *signing sender*, then the message is
-signed; in all other cases, the message is verified instead. A message is
-*authorised* if it comes from a local IP address or is submitted by an
-authenticated sender. The *originator* of a message is taken from the message’s
-*Sender* header if present, else from the message’s *From* header.
+Configuration parameters can be set in the default configuration file
+`/etc/dkim-milter/dkim-milter.conf`. The mandatory parameter `socket` must be
+set in that file.
 
-Some of the above will be made configurable in the future. The operating mode
-can also be configured with the `mode` parameter.
+DKIM Milter is usually set up as a system service. Use the provided systemd
+service as a starting point.
 
 The supported signature algorithms, for both signing and verifying, are
 `rsa-sha256` and `ed25519-sha256`. By default, the historic signature algorithm
@@ -70,7 +66,60 @@ result (RFC 8301; but see feature `sha1` above).
 
 TODO
 
-The default configuration file is `/etc/dkim-milter/dkim-milter.conf`.
+The default configuration file is `/etc/dkim-milter/dkim-milter.conf`. See the
+included example configuration for how to configure the milter; documentation is
+not complete yet.
+
+### Design
+
+TODO
+
+The configuration is currently entirely file-based.
+
+Overview of the configuration design:
+
+* main configuration file:
+  * default section
+  * signing section, introduced by `[signing]`
+  * verification section, introduced by `[verification]`
+
+The main configuration file contains global settings.
+
+The global settings can be overridden for certain inputs through *override
+files*. For example, the `recipient_overrides` parameter can be used to specify
+configuration overrides for certain message recipients. This allows, for
+example, to disable use of the *l=* tag in generated signatures globally, but
+enable it for certain recipients only.
+
+Overrides can be applied to recipients (given in the `RCPT TO:` SMTP command),
+to signers (present in a signature’s *d=* or *i=* tags), and to senders (in the
+*Sender* or *From* headers).
+
+This design, with main config whose `[signing]`/`[verification]` parameters can
+be overridden with some granularity, should be flexible enough to implement many
+configuration requirements.
+
+### Sign/verify decision
+
+TODO
+
+For all messages passed to DKIM Milter, the decision whether the message should
+undergo verification or signing is made in the following way.
+
+If a message comes from an *authorised* source and is submitted by an
+*originator* that matches a configured *signing sender*, then the message is
+signed; in all other cases, the message is verified instead. A message is
+*authorised* if it comes from a local IP address or is submitted by an
+authenticated sender. The *originator* of a message is taken from the message’s
+*Sender* header if present, else from the message’s *From* header. (Usually,
+*Sender* is not present, so the originator will be taken from *From*; however,
+if *From* contains multiple mailboxes, *Sender* must be included according to
+RFC 5322, and thus the originator will then be taken from *Sender*.)
+
+Some of the above will be made configurable in the future. The operating mode
+can also be configured with the `mode` parameter.
+
+### Basic usage
 
 ```
 socket = inet:localhost:3000

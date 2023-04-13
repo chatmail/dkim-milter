@@ -47,13 +47,16 @@ async fn main() {
 
     // TODO config reading needs logging, but logging needs config read
 
-    let config = match Config::read(opts).await {
+    let config = match Config::read(&opts).await {
         Ok(config) => config,
         Err(e) => {
-            let _ = writeln!(stderr(), "{PROGRAM_NAME}: {e}");
+            // dbg!(&e);
+            let _ = writeln!(stderr(), "{PROGRAM_NAME}: {}", e.display_multiline());
             process::exit(1);
         }
     };
+
+    // dbg!(&config);
 
     let (shutdown_tx, shutdown) = oneshot::channel();
 
