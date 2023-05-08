@@ -1,5 +1,6 @@
 use crate::config::{
-    model::{SenderEntry, SigningConfigOverrides, SigningOverrides, SigningSenders},
+    self,
+    model::{LogConfig, SenderEntry, SigningConfigOverrides, SigningOverrides, SigningSenders},
     parse::{self, ParseConfigError, ParseParamError, TableError, TableErrorKind, TempSenderEntry},
     CliOptions, Config, ConfigError, ConfigErrorKind,
 };
@@ -9,11 +10,34 @@ use std::{
     sync::Arc,
 };
 use tokio::fs;
-use tracing::warn;
+use log::warn;
 use viadkim::crypto::SigningKey;
 
+// preliminary, loose reading of LogConfig only
+// TODO ugh, move
+impl LogConfig {
+    pub async fn read(opts: &CliOptions) -> Result<Self, ConfigError> {
+        read_log_config(opts).await
+    }
+}
+
+pub async fn read_log_config(opts: &CliOptions) -> Result<LogConfig, ConfigError> {
+    let config_file = config::get_default_config_file(opts);
+
+    async {
+        let file_content = fs::read_to_string(config_file).await?;
+        let config = parse::parse_log_config(opts, &file_content).await?;
+        Ok(config)
+    }
+    .await
+    .map_err(|e| ConfigError {
+        file: config_file.into(),
+        kind: e,
+    })
+}
+
 pub async fn read_config(opts: &CliOptions) -> Result<Config, ConfigError> {
-    let config_file = &opts.config_file;
+    let config_file = config::get_default_config_file(opts);
 
     read_config_internal(opts)
         .await
@@ -24,7 +48,9 @@ pub async fn read_config(opts: &CliOptions) -> Result<Config, ConfigError> {
 }
 
 async fn read_config_internal(opts: &CliOptions) -> Result<Config, ConfigErrorKind> {
-    let file_content = fs::read_to_string(&opts.config_file).await?;
+    let config_file = config::get_default_config_file(opts);
+
+    let file_content = fs::read_to_string(config_file).await?;
 
     let config = parse::parse_config(opts, &file_content).await?;
 

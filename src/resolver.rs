@@ -13,11 +13,33 @@ use std::{
 use viadkim::verifier::LookupTxt;
 
 #[derive(Clone)]
-pub struct Resolver {
+pub struct MockLookupTxt {
+    pub mock_resolver: Arc<dyn Fn(&str) -> LookupFuture + Send + Sync>,
+}
+
+impl LookupTxt for MockLookupTxt {
+    type Answer = Vec<io::Result<Vec<u8>>>;
+    type Query<'a> = Pin<Box<dyn Future<Output = io::Result<Self::Answer>> + Send + 'a>>;
+
+    fn lookup_txt(&self, domain: &str) -> Self::Query<'_> {
+        let domain = domain.to_owned();
+        Box::pin(async move { (self.mock_resolver)(&domain).await })
+    }
+}
+
+pub type LookupFuture = Pin<Box<dyn Future<Output = io::Result<Vec<io::Result<Vec<u8>>>>> + Send>>;
+
+pub enum Resolver {
+    Live(DomainResolver),
+    Mock(Arc<MockLookupTxt>),
+}
+
+#[derive(Clone)]
+pub struct DomainResolver {
     pub resolver: Arc<StubResolver>,
 }
 
-impl Resolver {
+impl DomainResolver {
     pub fn new() -> Self {
         let resolver = Arc::new(StubResolver::new());
 
@@ -25,7 +47,7 @@ impl Resolver {
     }
 }
 
-impl LookupTxt for Resolver {
+impl LookupTxt for DomainResolver {
     type Answer = Vec<io::Result<Vec<u8>>>;
     type Query<'a> = Pin<Box<dyn Future<Output = io::Result<Self::Answer>> + Send + 'a>>;
 

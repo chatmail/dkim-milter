@@ -3,8 +3,9 @@ use crate::{
     config::{
         model::{
             OperationMode, SigningConfig, SigningConfigOverrides, SigningOverrides, SigningSenders,
+            SignedHeaders,
         },
-        Config,
+        RuntimeConfig,
     },
     format::{self, EmailAddr},
     resolver::Resolver,
@@ -12,7 +13,7 @@ use crate::{
 use bstr::ByteSlice;
 use indymilter::{ContextActions, Status};
 use std::{borrow::Cow, cmp, collections::HashSet, error::Error, mem, net::IpAddr, sync::Arc};
-use tracing::{debug, error, info};
+use log::{debug, error, info};
 use viadkim::{
     crypto::HashAlgorithm,
     header::{FieldBody, FieldName, HeaderFields},
@@ -66,16 +67,16 @@ impl MessageData {
 }
 
 pub struct Session {
-    config: Arc<Config>,
+    runtime: Arc<RuntimeConfig>,
 
     conn: ConnectionData,
     message: Option<MessageData>,
 }
 
 impl Session {
-    pub fn new(config: Arc<Config>) -> Self {
+    pub fn new(runtime: Arc<RuntimeConfig>) -> Self {
         Self {
-            config,
+            runtime,
             conn: ConnectionData::new(),
             message: None,
         }
@@ -189,7 +190,7 @@ impl Session {
             }
         };
 
-        match self.config.mode {
+        match self.runtime.config.mode {
             OperationMode::Auto | OperationMode::Sign => {
                 // local and authenticated senders are authorised
                 let authzd = self.conn.ip.filter(|i| i.is_loopback()).is_some() || message.auth;
@@ -216,7 +217,7 @@ impl Session {
                 let matches = match sender {
                     Some(sender) => {
                         debug!("{id}: using sender address: {sender}");
-                        find_matching_senders(&self.config.signing_senders, sender)
+                        find_matching_senders(&self.runtime.config.signing_senders, sender)
                     }
                     None => vec![],
                 };
@@ -227,7 +228,7 @@ impl Session {
                     let signer = self.prepare_signer(headers, matches)?;
                     Mode::Signing(signer)
                 } else {
-                    if self.config.mode == OperationMode::Auto {
+                    if self.runtime.config.mode == OperationMode::Auto {
                         debug!("{id}: verifying mode");
                         match self.prepare_verifier(headers).await {
                             Some(verifier) => Mode::Verifying(verifier),
@@ -267,7 +268,7 @@ impl Session {
         // at this point there is one or more signature to be generated;
         // first check if there are config overrides for the recipients!
 
-        let recipient_overrides = self.config.recipient_overrides.as_ref()
+        let recipient_overrides = self.runtime.config.recipient_overrides.as_ref()
             .and_then(|overrides| find_matching_recipient_overrides(
                 overrides,
                 &self.message.as_ref().unwrap().recipients,
@@ -283,13 +284,13 @@ impl Session {
 
             let config = match (&match_.signing_config, &recipient_overrides) {
                 (Some(c1), Some(c2)) => {
-                    self.config.signing_config.combine_with(c1).combine_with(c2)
+                    self.runtime.config.signing_config.combine_with(c1).combine_with(c2)
                 }
                 (Some(c), None) | (None, Some(c)) => {
-                    self.config.signing_config.combine_with(c)
+                    self.runtime.config.signing_config.combine_with(c)
                 }
                 (None, None) => {
-                    self.config.signing_config.clone()
+                    self.runtime.config.signing_config.clone()
                 }
             };
 
@@ -305,16 +306,21 @@ impl Session {
     }
 
     async fn prepare_verifier(&mut self, headers: HeaderFields) -> Option<Verifier> {
-        let resolver = Resolver::new();
-
-        let fail_if_expired = self.config.fail_if_expired;
+        let fail_if_expired = self.runtime.config.fail_if_expired;
 
         let config = verifier::Config {
             fail_if_expired,
             ..Default::default()
         };
 
-        Verifier::process_header(&resolver, &headers, &config).await
+        match &self.runtime.resolver {
+            Resolver::Live(r) => {
+                Verifier::process_header(r, &headers, &config).await
+            }
+            Resolver::Mock(r) => {
+                Verifier::process_header(r.as_ref(), &headers, &config).await
+            }
+        }
     }
 
     pub fn process_body_chunk(&mut self, chunk: &[u8]) -> Result<Status, Box<dyn Error>> {
@@ -385,16 +391,26 @@ impl Session {
 
                 for sig in &sigs {
                     // TODO
+
+                    let reason;
+                    let reason = if let Some(r) = auth_results::auth_results_reason_from_status(&sig.status) {
+                        reason = format!(" ({r})");
+                        &reason
+                    } else {
+                        ""
+                    };
+
                     info!(
-                        "{id}: verified signature from {}: {}",
+                        "{id}: verified signature from {}: {}{}",
                         get_domain_from_verification_result(sig),
-                        sig.status.to_auth_results_kind()
+                        sig.status.to_auth_results_kind(),
+                        reason
                     );
                 }
 
                 if !sigs.is_empty() {
                     let ar = auth_results::assemble_auth_results(
-                        self.config.authserv_id.as_deref().unwrap_or("localhost"),
+                        self.runtime.config.authserv_id.as_deref().unwrap_or("localhost"),
                         sigs,
                     );
 
@@ -480,13 +496,34 @@ fn make_sign_request(
         request.body_length = BodyLength::OnlyMessageLength;
     }
 
-    let mut signed_headers: HashSet<_> = signer::get_default_signed_headers().into_iter().collect();
-    signed_headers.insert(FieldName::new("Message-ID").unwrap());
     let oversigned_headers = HashSet::from([FieldName::new("From").unwrap()]);
-    request.header_selection = HeaderSelection::Pick {
-        include: signed_headers,
-        oversign: OversignStrategy::Selected(oversigned_headers),
-    };
+
+    match &config.signed_headers {
+        SignedHeaders::Pick(names) => {
+            let signed_headers: HashSet<_> = names.into_iter().map(|n| n.as_ref().clone()).collect();
+            request.header_selection = HeaderSelection::Pick {
+                include: signed_headers,
+                oversign: OversignStrategy::Selected(oversigned_headers),
+            };
+        }
+        SignedHeaders::PickWithDefault(names) => {
+            let mut signed_headers: HashSet<_> = signer::get_default_signed_headers().into_iter().collect();
+            for name in names {
+                signed_headers.insert(name.as_ref().clone());
+            }
+            request.header_selection = HeaderSelection::Pick {
+                include: signed_headers,
+                oversign: OversignStrategy::Selected(oversigned_headers),
+            };
+        }
+        SignedHeaders::All => {
+            let excluded_headers: HashSet<_> = signer::get_default_excluded_headers().into_iter().collect();
+            request.header_selection = HeaderSelection::All {
+                exclude: excluded_headers,
+                oversign: OversignStrategy::Selected(oversigned_headers),
+            };
+        }
+    }
 
     request
 }

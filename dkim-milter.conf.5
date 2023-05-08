@@ -1,0 +1,39 @@
+.TH DKIM-MILTER.CONF 5 2023-04-14 "DKIM Milter 0.1.0"
+.SH NAME
+dkim-milter.conf \- DKIM Milter configuration file
+.SH SYNOPSIS
+.B /etc/dkim-milter/dkim-milter.conf
+.SH DESCRIPTION
+.I dkim-milter.conf
+is the configuration file for DKIM Milter.
+.BR dkim-milter (8)
+is a milter application that signs or verifies messages using
+.I DomainKeys Identified Mail
+signatures.
+.PP
+To do.
+.SH PARAMETERS
+This section lists all available configuration parameters in alphabetical order.
+Possible values for each parameter are given in parentheses.
+.PP
+To do.
+.TP
+.BR authserv_id " (\fIstring\fR)"
+The
+.I authserv-id
+or
+.I authentication service identifier
+to use in
+.I Authentication-Results
+header fields.
+Refer to RFC 8601, section 2.5 for a description of this element.
+Only the unquoted syntax is supported for the
+.I authserv-id
+value.
+Defaults to the
+.B hostname
+setting.
+.SH FILES
+.I /etc/dkim-milter/dkim-milter.conf
+.SH SEE ALSO
+.BR dkim-milter (8)

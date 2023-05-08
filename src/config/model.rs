@@ -6,6 +6,7 @@ use std::{
     sync::Arc,
 };
 use viadkim::{
+    header::{HeaderFieldError, FieldName},
     crypto::SigningKey,
     signature::{Canonicalization, CanonicalizationAlgorithm, DomainName, Selector},
 };
@@ -21,16 +22,15 @@ impl Display for ParseLogDestinationError {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
 pub enum LogDestination {
+    /*
+    #[default]
     Journald,
+    */
+    #[default]
+    Syslog,
     Stderr,
-}
-
-impl Default for LogDestination {
-    fn default() -> Self {
-        Self::Journald
-    }
 }
 
 impl FromStr for LogDestination {
@@ -38,9 +38,46 @@ impl FromStr for LogDestination {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
+            /*
             "journald" => Ok(Self::Journald),
+            */
+            "syslog" => Ok(Self::Syslog),
             "stderr" => Ok(Self::Stderr),
             _ => Err(ParseLogDestinationError),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
+pub struct ParseLogLevelError;
+
+impl Error for ParseLogLevelError {}
+
+impl Display for ParseLogLevelError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "failed to parse log level")
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
+pub enum LogLevel {
+    Error,
+    Warn,
+    #[default]
+    Info,
+    Debug,
+}
+
+impl FromStr for LogLevel {
+    type Err = ParseLogLevelError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "error" => Ok(Self::Error),
+            "warn" => Ok(Self::Warn),
+            "info" => Ok(Self::Info),
+            "debug" => Ok(Self::Debug),
+            _ => Err(ParseLogLevelError),
         }
     }
 }
@@ -110,10 +147,116 @@ impl FromStr for OperationMode {
 #[derive(Clone, Debug)]
 pub struct LogConfig {
     pub log_destination: LogDestination,
+    pub log_level: LogLevel,
+}
+
+// like viadkim's FieldName but does not allow ";" in name
+#[derive(Clone, Debug, PartialEq)]
+pub struct SignedFieldName(FieldName);
+
+impl SignedFieldName {
+    pub fn new(value: impl Into<Box<str>>) -> Result<Self, HeaderFieldError> {
+        let name = FieldName::new(value)?;
+        if name.as_ref().contains(';') {
+            return Err(HeaderFieldError);
+        }
+        Ok(Self(name))
+    }
+}
+
+impl AsRef<FieldName> for SignedFieldName {
+    fn as_ref(&self) -> &FieldName {
+        &self.0
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
+pub struct ParseSignedHeaders;
+
+impl Error for ParseSignedHeaders {}
+
+impl Display for ParseSignedHeaders {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "failed to parse signed headers")
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum SignedHeaders {
+    Pick(Vec<SignedFieldName>),  // must contain From
+    PickWithDefault(Vec<SignedFieldName>),  // need not contain From
+    All,
+}
+
+impl FromStr for SignedHeaders {
+    type Err = ParseSignedHeaders;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        // assumes s is already trimmed
+
+        if let Some(rest) = s.strip_prefix("default") {
+            if rest.is_empty() {
+                return Ok(Self::PickWithDefault(vec![]));
+            }
+
+            let s = rest.trim_start();
+            if let Some(rest) = s.strip_prefix(';') {
+                let s = rest.trim_start();
+
+                // now treat s as colon-separated field name values
+                let result = split_at_colon(s)
+                    .map(|x| {
+                        x.and_then(|s| SignedFieldName::new(s).map_err(|_| ParseSignedHeaders))
+                    })
+                .collect::<Result<_, _>>()?;
+                return Ok(Self::PickWithDefault(result));
+            }
+        } else if let Some(rest) = s.strip_prefix("all") {
+            if rest.is_empty() {
+                return Ok(Self::All);
+            }
+        } else {
+            // parse colon-separated field name values
+            let result: Vec<_> = split_at_colon(s)
+                .map(|x| {
+                    x.and_then(|s| SignedFieldName::new(s).map_err(|_| ParseSignedHeaders))
+                })
+                .collect::<Result<_, _>>()?;
+            if !result.iter().any(|n| *n.as_ref() == "From") {
+                return Err(ParseSignedHeaders);
+            }
+            return Ok(Self::Pick(result));
+        }
+
+        Err(ParseSignedHeaders)
+    }
+}
+
+// colon cannot appear in field names, so is a good choice for the separator
+fn split_at_colon(value: &str) -> impl Iterator<Item = Result<&str, ParseSignedHeaders>> {
+    let value = value.trim();
+
+    let mut values = value.split(':');
+
+    // If the value is empty, `split` will yield one empty string slice. In that
+    // case, drop this string so that the iterator becomes empty.
+    if value.is_empty() {
+        values.next();
+    }
+
+    values.map(|s| {
+        let s = s.trim();
+        if s.is_empty() {
+            Err(ParseSignedHeaders)
+        } else {
+            Ok(s)
+        }
+    })
 }
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct SigningConfig {
+    pub signed_headers: SignedHeaders,
     pub canonicalization: Canonicalization,
     pub copy_headers: bool,
     pub limit_body_length: bool,
@@ -122,6 +265,9 @@ pub struct SigningConfig {
 impl SigningConfig {
     pub fn combine_with(&self, overrides: &SigningConfigOverrides) -> Self {
         let mut config = self.clone();
+        if let Some(signed_headers) = &overrides.signed_headers {
+            config.signed_headers = signed_headers.clone();
+        }
         if let Some(canonicalization) = overrides.canonicalization {
             config.canonicalization = canonicalization;
         }
@@ -138,6 +284,7 @@ impl SigningConfig {
 impl Default for SigningConfig {
     fn default() -> Self {
         Self {
+            signed_headers: SignedHeaders::PickWithDefault(Default::default()),
             canonicalization: Canonicalization {
                 header: CanonicalizationAlgorithm::Relaxed,
                 body: CanonicalizationAlgorithm::Simple,
@@ -150,6 +297,7 @@ impl Default for SigningConfig {
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct SigningConfigOverrides {
+    pub signed_headers: Option<SignedHeaders>,
     pub canonicalization: Option<Canonicalization>,
     pub copy_headers: Option<bool>,
     pub limit_body_length: Option<bool>,
@@ -158,6 +306,9 @@ pub struct SigningConfigOverrides {
 impl SigningConfigOverrides {
     pub fn into_signing_config(self) -> SigningConfig {
         let mut config = SigningConfig::default();
+        if let Some(signed_headers) = self.signed_headers {
+            config.signed_headers = signed_headers;
+        }
         if let Some(canonicalization) = self.canonicalization {
             config.canonicalization = canonicalization;
         }

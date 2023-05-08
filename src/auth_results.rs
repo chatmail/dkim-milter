@@ -1,6 +1,6 @@
 use crate::session;
 use std::fmt::Write;
-use tracing::debug;
+use log::debug;
 use viadkim::verifier::{VerificationResult, VerificationStatus};
 
 pub fn auth_results_reason_from_status(status: &VerificationStatus) -> Option<String> {

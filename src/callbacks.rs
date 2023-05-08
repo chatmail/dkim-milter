@@ -1,4 +1,4 @@
-use crate::{config::Config, session::Session};
+use crate::{config::RuntimeConfig, session::Session};
 use byte_strings::c_str;
 use indymilter::{
     Actions, Callbacks, Context, EomContext, MacroStage, Macros, NegotiateContext, ProtoOpts,
@@ -7,9 +7,9 @@ use indymilter::{
 use std::{
     borrow::Cow,
     ffi::{CStr, CString},
-    sync::Arc,
+    sync::{Arc, RwLock},
 };
-use tracing::{debug, error};
+use log::{debug, error};
 
 macro_rules! get_session {
     ($context:expr) => {
@@ -36,9 +36,9 @@ impl MacrosExt for Macros {
     }
 }
 
-pub fn make_callbacks(config: Arc<Config>) -> Callbacks<Session> {
+pub fn make_callbacks(runtime: Arc<RwLock<Arc<RuntimeConfig>>>) -> Callbacks<Session> {
     Callbacks::new()
-        .on_negotiate(move |cx, _, _| Box::pin(handle_negotiate(config.clone(), cx)))
+        .on_negotiate(move |cx, _, _| Box::pin(handle_negotiate(runtime.clone(), cx)))
         .on_connect(|cx, _, socket_info| Box::pin(handle_connect(cx, socket_info)))
         .on_mail(|cx, smtp_args| Box::pin(handle_mail(cx, smtp_args)))
         .on_rcpt(|cx, smtp_args| Box::pin(handle_rcpt(cx, smtp_args)))
@@ -50,7 +50,15 @@ pub fn make_callbacks(config: Arc<Config>) -> Callbacks<Session> {
         .on_close(|cx| Box::pin(handle_close(cx)))
 }
 
-async fn handle_negotiate(config: Arc<Config>, context: &mut NegotiateContext<Session>) -> Status {
+async fn handle_negotiate(
+    runtime: Arc<RwLock<Arc<RuntimeConfig>>>,
+    context: &mut NegotiateContext<Session>,
+) -> Status {
+    let runtime = runtime
+        .read()
+        .expect("could not get configuration read lock")
+        .clone();
+
     context.requested_actions |= Actions::ADD_HEADER;
     context.requested_opts |= ProtoOpts::SKIP | ProtoOpts::LEADING_SPACE;
 
@@ -59,7 +67,7 @@ async fn handle_negotiate(config: Arc<Config>, context: &mut NegotiateContext<Se
     macros.insert(MacroStage::Mail, c_str!("{auth_type}").into());
     macros.insert(MacroStage::Data, c_str!("i").into());
 
-    context.data = Some(Session::new(config));
+    context.data = Some(Session::new(runtime));
 
     Status::Continue
 }

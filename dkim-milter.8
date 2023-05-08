@@ -1,0 +1,68 @@
+.TH DKIM-MILTER 8 2023-04-14 "DKIM Milter 0.1.0"
+.SH NAME
+dkim-milter \- milter for DKIM signing and verification
+.SH SYNOPSIS
+.SY dkim-milter
+.OP \-c path
+.OP \-L level
+.OP \-l target
+.OP \-p socket
+.YS
+.SH DESCRIPTION
+.B dkim-milter
+is a milter application that signs or verifies messages using
+.I DomainKeys Identified Mail
+signatures.
+.PP
+To do.
+.SH OPTIONS
+.TP
+.BR \-c ", " \-\-config-file " \fIpath\fR"
+Path to configuration file.
+The
+.I path
+value is a path to a DKIM Milter configuration file.
+See
+.BR dkim-milter.conf (5)
+for the reference documentation.
+If this option is not used, configuration parameters are read from the default
+configuration file
+.IR /etc/dkim-milter/dkim-milter.conf .
+.TP
+.BR \-h ", " \-\-help
+Print usage information.
+.TP
+.BR \-l ", " \-\-log-destination " \fItarget\fR"
+Destination for log messages.
+The
+.I target
+value may be either
+.BR syslog ,
+to write log messages to the system logger, or
+.BR stderr ,
+to write log messages to standard error.
+.TP
+.BR \-L ", " \-\-log-level " \fIlevel\fR"
+Minimum severity of messages to log.
+The
+.I level
+value may be one of
+.BR error ,
+.BR warn ,
+.BR info ,
+or
+.BR debug .
+.TP
+.BR \-p ", " \-\-socket " \fIsocket\fR"
+Listening socket of the milter.
+The
+.I socket
+value is a socket specification string describing the socket that the milter
+should open for the connection from the MTA.
+.TP
+.BR \-V ", " \-\-version
+Print version information.
+.SH FILES
+.I /etc/dkim-milter/dkim-milter.conf
+.SH SEE ALSO
+.BR dkim-milter.conf (5)

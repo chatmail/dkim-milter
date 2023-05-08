@@ -1,6 +1,6 @@
 # Sender expression    Domain         Selector    Key name   Signature overrides
 .example.com           example.com    rsa         rsa
-.example.com           example.com    ed25519     ed25519    <sample-conf/signature-overrides.d/canon-simple.conf
+.example.com           example.com    ed25519     ed25519    <sample-conf/overrides/canon-simple.conf
 
 # The above sample configuration signs each email message from *@*.example.com
 # with the two (private) signing keys named "rsa" and "ed25519".

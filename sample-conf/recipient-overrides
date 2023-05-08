@@ -1,12 +1,7 @@
 # Recipient expression    Config file
-.example.com              <sample-conf/recipient-overrides.d/body-len.conf
+.example.com              <sample-conf/overrides/body-len.conf
 
 # The recipient overrides file allows overriding the main signing configuration
 # for certain recipients only. For example, the above configuration overrides
 # the setting "limit_body_length = no" in the main configuration file with the
 # setting "yes", if a given message is addressed to *@*.example.com.
-
-# In the future, inline params may be allowed, for example:
-# .example.com     [signing] { limit_body_length = yes }
-# or
-# .example.com     { limit_body_length = yes ; ... ? }

@@ -1,7 +1,7 @@
 use crate::config::{
     model::{
-        OperationMode, OverrideEntry, SigningConfig, SigningConfigOverrides, Socket,
-        VerificationConfig,
+        LogConfig, LogDestination, LogLevel, OperationMode, OverrideEntry, SignedHeaders,
+        SigningConfig, SigningConfigOverrides, Socket, VerificationConfig,
     },
     read, CliOptions, Config, ConfigError, ConfigErrorKind,
 };
@@ -52,8 +52,11 @@ impl Error for ParseConfigError {
             | MissingSection(_)
             | UnknownKey(_)
             | DuplicateKey(_)
+            | InvalidLogDestination(_)
+            | InvalidLogLevel(_)
             | InvalidSocket(_)
             | InvalidBoolean(_)
+            | InvalidSignedHeaders(_)
             | InvalidCanonicalization(_)
             | InvalidMode(_) => None,
             ReadSigningKeys(e) | ReadSigningSenders(e) | ReadRecipientOverrides(e) => Some(e),
@@ -73,8 +76,11 @@ impl Display for ParseConfigError {
             | MissingSection(_)
             | UnknownKey(_)
             | DuplicateKey(_)
+            | InvalidLogDestination(_)
+            | InvalidLogLevel(_)
             | InvalidSocket(_)
             | InvalidBoolean(_)
+            | InvalidSignedHeaders(_)
             | InvalidCanonicalization(_)
             | InvalidMode(_) => write!(f, ": {}", self.kind),
             _ => Ok(()),
@@ -91,8 +97,12 @@ pub enum ParseParamError {
     UnknownKey(String),
     DuplicateKey(String),
 
+    InvalidLogDestination(String),
+    InvalidLogLevel(String),
+
     InvalidSocket(String),
     InvalidBoolean(String),
+    InvalidSignedHeaders(String),
     InvalidCanonicalization(String),
     InvalidMode(String),
 
@@ -113,8 +123,12 @@ impl Display for ParseParamError {
             Self::UnknownKey(key) => write!(f, "unknown parameter \"{key}\""),
             Self::DuplicateKey(key) => write!(f, "duplicate parameter \"{key}\""),
 
+            Self::InvalidLogDestination(s) => write!(f, "invalid log destination \"{s}\""),
+            Self::InvalidLogLevel(s) => write!(f, "invalid log level \"{s}\""),
+
             Self::InvalidSocket(s) => write!(f, "invalid socket \"{s}\""),
             Self::InvalidBoolean(s) => write!(f, "invalid Boolean value \"{s}\""),
+            Self::InvalidSignedHeaders(s) => write!(f, "invalid signed headers \"{s}\""),
             Self::InvalidCanonicalization(s) => write!(f, "invalid canonicalization \"{s}\""),
             Self::InvalidMode(s) => write!(f, "invalid operation mode \"{s}\""),
 
@@ -208,7 +222,7 @@ impl Error for TableFormatError {
             | InvalidSelector
             | InvalidFileSyntax => None,
             ReadKeyFile(e) => Some(e),
-            ReadConfig(e) => Some(&*e),
+            ReadConfig(e) => Some(e),
         }
     }
 }
@@ -259,6 +273,79 @@ impl Display for TableFormatErrorKind {
     }
 }
 
+// TODO this is an inaccurate preliminary parse of the log configuration only
+pub async fn parse_log_config(
+    opts: &CliOptions,
+    file_content: &str,
+) -> Result<LogConfig, ConfigErrorKind> {
+    let mut log_destination = None;
+    let mut log_level = None;
+
+    let mut keys_seen = HashSet::new();
+
+    let mut iter = lines(file_content);
+
+    while let Some((num, line)) = iter.next() {
+        // bail on first section seen
+        if let Some(_section) = parse_section_line(line) {
+            break;
+        }
+
+        match line.split_once('=') {
+            Some((k, v)) => {
+                let k = k.trim();
+                let v = v.trim();
+
+                if keys_seen.contains(k) {
+                    return Err(ParseConfigError {
+                        line: num,
+                        kind: ParseParamError::DuplicateKey(k.into()),
+                    }
+                    .into());
+                }
+
+                match k {
+                    "log_destination" => {
+                        let value = LogDestination::from_str(v).map_err(|_| ParseConfigError {
+                            line: num,
+                            kind: ParseParamError::InvalidLogDestination(v.into()),
+                        })?;
+                        log_destination = Some(value);
+                    }
+                    "log_level" => {
+                        let value = LogLevel::from_str(v).map_err(|_| ParseConfigError {
+                            line: num,
+                            kind: ParseParamError::InvalidLogLevel(v.into()),
+                        })?;
+                        log_level = Some(value);
+                    }
+                    _ => {
+                        // ignore all other params
+                        continue;
+                    }
+                }
+
+                keys_seen.insert(k);
+            }
+            None => {
+                return Err(ParseConfigError {
+                    line: num,
+                    kind: ParseParamError::InvalidLine,
+                }
+                .into());
+            }
+        }
+    }
+
+    let log_destination = opts.log_destination.or(log_destination).unwrap_or_default();
+    let log_level = opts.log_level.or(log_level).unwrap_or_default();
+
+    Ok(LogConfig {
+        log_destination,
+        log_level,
+    })
+}
+
 pub async fn parse_config(
     opts: &CliOptions,
     file_content: &str,
@@ -270,6 +357,8 @@ pub async fn parse_config(
     let mut recipient_overrides_file = None;
     let mut socket = None;
     let mut fail_if_expired = None;
+    let mut log_destination = None;
+    let mut log_level = None;
 
     let mut signing_config = None;
     let mut verification_config = None;
@@ -299,7 +388,7 @@ pub async fn parse_config(
                     _ => {
                         return Err(ParseConfigError {
                             line: num,
-                            kind: ParseParamError::UnknownSection(section.into()),
+                            kind: ParseParamError::UnknownSection(section),
                         }
                         .into());
                     }
@@ -342,6 +431,20 @@ pub async fn parse_config(
                     "authserv_id" => {
                         authserv_id = Some(v.to_owned());
                     }
+                    "log_destination" => {
+                        let value = LogDestination::from_str(v).map_err(|_| ParseConfigError {
+                            line: num,
+                            kind: ParseParamError::InvalidLogDestination(v.into()),
+                        })?;
+                        log_destination = Some(value);
+                    }
+                    "log_level" => {
+                        let value = LogLevel::from_str(v).map_err(|_| ParseConfigError {
+                            line: num,
+                            kind: ParseParamError::InvalidLogLevel(v.into()),
+                        })?;
+                        log_level = Some(value);
+                    }
                     "mode" => {
                         let value = OperationMode::from_str(v).map_err(|_| ParseConfigError {
                             line: num,
@@ -379,7 +482,15 @@ pub async fn parse_config(
 
     let socket = match opts.socket.as_ref() {
         Some(s) => s.to_owned(),
-        None => socket.ok_or_else(|| ValidationError::MissingSocketParam)?,
+        None => socket.ok_or(ValidationError::MissingSocketParam)?,
+    };
+
+    let log_destination = opts.log_destination.or(log_destination).unwrap_or_default();
+    let log_level = opts.log_level.or(log_level).unwrap_or_default();
+
+    let log_config = LogConfig {
+        log_destination,
+        log_level,
     };
 
     let signing_senders = match (signing_keys_file, signing_senders_file) {
@@ -417,6 +528,7 @@ pub async fn parse_config(
         signing_senders,
         recipient_overrides,
         authserv_id,
+        log_config,
         signing_config,
         verification_config,
         mode,
@@ -439,6 +551,7 @@ async fn parse_config_section_signing(
 async fn parse_config_section_signing_overrides(
     iter: &mut impl Iterator<Item = (usize, &str)>,
 ) -> Result<(SigningConfigOverrides, Option<String>), ParseConfigError> {
+    let mut signed_headers = None;
     let mut canonicalization = None;
     let mut copy_headers = None;
     let mut limit_body_length = None;
@@ -466,6 +579,14 @@ async fn parse_config_section_signing_overrides(
                 }
 
                 match k {
+                    "signed_headers" => {
+                        let value =
+                            SignedHeaders::from_str(v).map_err(|_| ParseConfigError {
+                                line: num,
+                                kind: ParseParamError::InvalidSignedHeaders(v.into()),
+                            })?;
+                        signed_headers = Some(value);
+                    }
                     "canonicalization" => {
                         let value =
                             Canonicalization::from_str(v).map_err(|_| ParseConfigError {
@@ -508,6 +629,7 @@ async fn parse_config_section_signing_overrides(
     }
 
     let signing_config = SigningConfigOverrides {
+        signed_headers,
         canonicalization,
         copy_headers,
         limit_body_length,

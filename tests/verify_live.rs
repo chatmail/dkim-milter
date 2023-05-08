@@ -5,16 +5,15 @@ pub use common::*;
 use dkim_milter::*;
 use indymilter::MacroStage;
 use indymilter_test::*;
-use tracing::debug;
+use log::debug;
 
 #[tokio::test]
 #[ignore = "depends on live DNS records"]
-async fn basic_verify_rsa() {
-    let _ = tracing_subscriber::fmt::try_init();
+async fn verify_live() {
+    let mut opts = default_cli_options();
+    opts.config_file = Some("tests/verify_live/dkim-milter.conf".into());
 
-    let mut opts = CliOptions::default();
-    opts.config_file = "tests/dkim-milter.conf".into();
-    let config = Config::read(&opts).await.unwrap();
+    let config = Config::read(opts).await.unwrap();
 
     let milter = DkimMilter::spawn(config).await.unwrap();
 

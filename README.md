@@ -92,8 +92,7 @@ example, to disable use of the *l=* tag in generated signatures globally, but
 enable it for certain recipients only.
 
 Overrides can be applied to recipients (given in the `RCPT TO:` SMTP command),
-to signers (present in a signature’s *d=* or *i=* tags), and to senders (in the
-*Sender* or *From* headers).
+and to senders (in the *Sender* or *From* headers).
 
 This design, with main config whose `[signing]`/`[verification]` parameters can
 be overridden with some granularity, should be flexible enough to implement many
@@ -160,9 +159,6 @@ automatically.
 
 Additional per-signature (ie, per sender expression match) configuration
 overrides are in `signature_settings` (not implemented).
-
-Logging must currently be requested by setting environment variable
-`RUST_LOG=info`.
 
 ## Key setup
 

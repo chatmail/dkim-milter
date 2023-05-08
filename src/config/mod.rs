@@ -2,62 +2,57 @@ pub mod model;
 pub mod parse;
 pub mod read;
 
-use crate::config::{
-    model::{
-        LogDestination, OperationMode, SigningConfig, SigningOverrides, SigningSenders, Socket,
-        VerificationConfig,
+use crate::{
+    config::{
+        model::{
+            LogConfig, LogDestination, LogLevel, OperationMode, SigningConfig, SigningOverrides,
+            SigningSenders, Socket, VerificationConfig,
+        },
+        parse::{ParseConfigError, ValidationError},
     },
-    parse::{ParseConfigError, ValidationError},
+    resolver::{DomainResolver, Resolver},
+    MockLookupTxt,
 };
+use log::{error, info};
 use std::{
     error::Error,
     fmt::{self, Display, Formatter},
-    io,
-    path::PathBuf,
+    io, mem,
+    path::{Path, PathBuf},
+    sync::{Arc, RwLock},
 };
 
-const DEFAULT_CONFIG_FILE: &str = match option_env!("DKIM_MILTER_CONFIG_FILE") {
+pub const DEFAULT_CONFIG_FILE: &str = match option_env!("DKIM_MILTER_CONFIG_FILE") {
     Some(s) => s,
     None => "/etc/dkim-milter/dkim-milter.conf",
 };
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+pub fn get_default_config_file(opts: &CliOptions) -> &Path {
+    opts.config_file.as_deref().unwrap_or_else(|| Path::new(DEFAULT_CONFIG_FILE))
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct CliOptions {
-    // TODO config_file should be Option as well, default value belongs elsewhere
-    pub config_file: PathBuf,
+    pub config_file: Option<PathBuf>,
     pub log_destination: Option<LogDestination>,
+    pub log_level: Option<LogLevel>,
     pub socket: Option<Socket>,
 }
 
-impl Default for CliOptions {
-    fn default() -> Self {
-        Self {
-            config_file: DEFAULT_CONFIG_FILE.into(),
-            log_destination: None,
-            socket: None,
-        }
+pub struct RuntimeConfig {
+    pub config: Config,
+    pub resolver: Resolver,
+}
+
+impl RuntimeConfig {
+    pub fn new(config: Config) -> Self {
+        let resolver = Resolver::Live(DomainResolver::new());
+        Self { config, resolver }
     }
-}
 
-struct ConfigErrorDisplay<'a> {
-    inner: &'a ConfigError,
-    multiline: bool,
-}
-
-impl Display for ConfigErrorDisplay<'_> {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        let mut error: &(dyn Error + 'static) = self.inner;
-        write!(f, "{error}")?;
-        while let Some(next) = error.source() {
-            error = next;
-            if self.multiline {
-                writeln!(f)?;
-                write!(f, "  {error}")?;
-            } else {
-                write!(f, ": {error}")?;
-            }
-        }
-        Ok(())
+    pub fn with_mock_resolver(config: Config, resolver: MockLookupTxt) -> Self {
+        let resolver = Resolver::Mock(Arc::new(resolver));
+        Self { config, resolver }
     }
 }
 
@@ -65,22 +60,6 @@ impl Display for ConfigErrorDisplay<'_> {
 pub struct ConfigError {
     pub file: PathBuf,
     pub kind: ConfigErrorKind,
-}
-
-impl ConfigError {
-    pub fn display(&self) -> impl Display + '_ {
-        ConfigErrorDisplay {
-            inner: self,
-            multiline: false,
-        }
-    }
-
-    pub fn display_multiline(&self) -> impl Display + '_ {
-        ConfigErrorDisplay {
-            inner: self,
-            multiline: true,
-        }
-    }
 }
 
 impl Error for ConfigError {
@@ -144,6 +123,7 @@ pub struct Config {
     // TODO
     pub recipient_overrides: Option<SigningOverrides>,  // <Regex, SigningConfig>
     // pub verification_overrides: X,  // <Regex, VerificationConfig>
+    pub log_config: LogConfig,
 
     pub signing_config: SigningConfig,
     pub verification_config: VerificationConfig,
@@ -160,6 +140,7 @@ impl fmt::Debug for Config {
             .field("signing_senders", &"<omitted>")//&self.signing_senders)
             // .field("signing_keys", &"<omitted>")
             .field("recipient_overrides", &self.recipient_overrides)
+            .field("log_config", &self.log_config)
             .field("signing_config", &self.signing_config)
             .field("verification_config", &self.verification_config)
             .field("fail_if_expired", &self.fail_if_expired)
@@ -171,4 +152,35 @@ impl Config {
     pub async fn read(opts: &CliOptions) -> Result<Self, ConfigError> {
         read::read_config(opts).await
     }
+}
+
+// TODO
+pub async fn reload(current_runtime: &RwLock<Arc<RuntimeConfig>>, opts: &CliOptions) {
+    let config_file = get_default_config_file(opts);
+
+    let config = match Config::read(opts).await {
+        Ok(config) => config,
+        Err(e) => {
+            error!("failed to reload configuration: {e}");
+            return;
+        }
+    };
+
+    // TODO record params that cannot be reloaded, report later
+
+    let _old_runtime = {
+        let mut locked_runtime = current_runtime
+            .write()
+            .expect("could not get configuration write lock");
+
+        let resolver = match &locked_runtime.resolver {
+            Resolver::Live(_) => Resolver::Live(DomainResolver::new()),
+            Resolver::Mock(m) => Resolver::Mock(m.clone()),
+        };
+        let runtime = RuntimeConfig { config, resolver };
+
+        mem::replace(&mut *locked_runtime, Arc::new(runtime))
+    };
+
+    info!("configuration reloaded from {}", config_file.display());
 }
