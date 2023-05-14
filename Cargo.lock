@@ -183,15 +183,17 @@ dependencies = [
 
 [[package]]
 name = "domain"
-version = "0.7.2"
+version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "415f70b855528e589c4d787338d22ad4e9e6d012167ba3c5279f4e9805e50ceb"
+checksum = "04c9fdb317c54875188fea3e4ae483d4b3cf71b131888e9b7665fd6b020fb327"
 dependencies = [
  "bytes",
  "futures",
  "libc",
+ "octseq",
  "rand",
  "smallvec",
+ "time",
  "tokio",
 ]
 
@@ -420,9 +422,9 @@ dependencies = [
 
 [[package]]
 name = "libc"
-version = "0.2.141"
+version = "0.2.144"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3304a64d199bb964be99741b7a14d26972741915b3649639149b2479bb46f4b5"
+checksum = "2b00cc1c228a6782d0f076e7b232802e0c5689d41bb5df366f2a6b6621cfdfe1"
 
 [[package]]
 name = "libm"
@@ -534,6 +536,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2819ce041d2ee131036f4fc9d6ae7ae125a3a40e97ba64d04fe799ad9dabbb44"
 dependencies = [
  "libc",
+]
+
+[[package]]
+name = "octseq"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5190e3482f38446ee3f3ab50b049a16b072b6111cba008381b816598478ba65d"
+dependencies = [
+ "bytes",
+ "smallvec",
 ]
 
 [[package]]
@@ -673,9 +685,9 @@ checksum = "f162c6dd7b008981e4d40210aca20b4bd0f9b60ca9271061b07f78537722f2e1"
 
 [[package]]
 name = "rsa"
-version = "0.9.1"
+version = "0.9.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "72f1471dbb4be5de45050e8ef7040625298ccb9efe941419ac2697088715925f"
+checksum = "6ab43bb47d23c1a631b4b680199a45255dce26fa9ab2fa902581f624ff13e6a8"
 dependencies = [
  "byteorder",
  "const-oid",
@@ -688,6 +700,7 @@ dependencies = [
  "pkcs8",
  "rand_core",
  "signature",
+ "spki",
  "subtle",
  "zeroize",
 ]
@@ -794,9 +807,9 @@ checksum = "6e63cff320ae2c57904679ba7cb63280a3dc4613885beafb148ee7bf9aa9042d"
 
 [[package]]
 name = "spki"
-version = "0.7.1"
+version = "0.7.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "37a5be806ab6f127c3da44b7378837ebf01dadca8510a0e572460216b228bd0e"
+checksum = "9d1e996ef02c474957d681f1b05213dfb0abab947b446a62d37770b23500184a"
 dependencies = [
  "base64ct",
  "der",

@@ -1,7 +1,7 @@
 use crate::session;
-use std::fmt::Write;
 use log::debug;
-use viadkim::verifier::{VerificationResult, VerificationStatus};
+use std::fmt::Write;
+use viadkim::verifier::{AuthResultsKind, VerificationResult, VerificationStatus};
 
 pub fn auth_results_reason_from_status(status: &VerificationStatus) -> Option<String> {
     match status {
@@ -16,32 +16,37 @@ pub fn assemble_auth_results(authserv_id: &str, sigs: Vec<VerificationResult>) -
 
     write!(result, " {authserv_id}").unwrap();
 
-    for sig in sigs {
-        debug!("signature result: {:?}", sig.status);
+    if sigs.is_empty() {
+        let ar = AuthResultsKind::None;
+        write!(result, "; dkim={ar}").unwrap();
+    } else {
+        for sig in sigs {
+            debug!("signature result: {:?}", sig.status);
 
-        result.push_str(";\n\t");
+            result.push_str(";\n\t");
 
-        let ar = sig.status.to_auth_results_kind();
+            let ar = sig.status.to_auth_results_kind();
 
-        write!(result, "dkim={ar}").unwrap();
+            write!(result, "dkim={ar}").unwrap();
 
-        if let Some(reason) = auth_results_reason_from_status(&sig.status) {
-            write!(result, " reason=\"{reason}\"").unwrap();
-        }
+            if let Some(reason) = auth_results_reason_from_status(&sig.status) {
+                write!(result, " reason=\"{reason}\"").unwrap();
+            }
 
-        // TODO actually, this doesn't belong in Auth-Results
-        // if let Some(key_size) = sig.key_size {
-        //     write!(result, " ({}-bit key)", key_size.to_string()).unwrap();
-        // }
+            // TODO actually, this doesn't belong in Auth-Results
+            // if let Some(key_size) = sig.key_size {
+            //     write!(result, " ({}-bit key)", key_size.to_string()).unwrap();
+            // }
 
-        write!(
-            result,
-            " header.d={}",
-            session::get_domain_from_verification_result(&sig),
-        ).unwrap();
+            write!(
+                result,
+                " header.d={}",
+                session::get_domain_from_verification_result(&sig),
+            ).unwrap();
 
-        if let Some(s) = session::get_signature_prefix_from_verification_result(&sig) {
-            write!(result, " header.b={s}").unwrap();
+            if let Some(s) = session::get_signature_prefix_from_verification_result(&sig) {
+                write!(result, " header.b={s}").unwrap();
+            }
         }
     }
 

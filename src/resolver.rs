@@ -74,7 +74,7 @@ impl LookupTxt for DomainResolver {
             let results = txts
                 .map(|r| match r {
                     Ok(record) => {
-                        let txt = record.into_data().text().unwrap();
+                        let txt = record.into_data().text();
                         Ok(normalize_line_breaks(txt))
                     }
                     Err(_) => Err(ErrorKind::InvalidData.into()),

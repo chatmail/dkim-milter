@@ -29,7 +29,7 @@ pub enum Mode {
     #[default]
     Inactive,
     Signing(Signer<Arc<SigningKey>>),
-    Verifying(Verifier),
+    Verifying(Option<Verifier>),
 }
 
 enum FromAddrError {
@@ -230,10 +230,8 @@ impl Session {
                 } else {
                     if self.runtime.config.mode == OperationMode::Auto {
                         debug!("{id}: verifying mode");
-                        match self.prepare_verifier(headers).await {
-                            Some(verifier) => Mode::Verifying(verifier),
-                            None => Mode::Inactive,
-                        }
+                        let verifier = self.prepare_verifier(headers).await;
+                        Mode::Verifying(verifier)
                     } else {
                         Mode::Inactive
                     }
@@ -244,10 +242,8 @@ impl Session {
             }
             OperationMode::Verify => {
                 debug!("{id}: verifying mode");
-                let mode = match self.prepare_verifier(headers).await {
-                    Some(verifier) => Mode::Verifying(verifier),
-                    None => Mode::Inactive,
-                };
+                let verifier = self.prepare_verifier(headers).await;
+                let mode = Mode::Verifying(verifier);
 
                 let message = self.message.as_mut().unwrap();
                 message.mode = mode;
@@ -330,11 +326,11 @@ impl Session {
         };
 
         let status = match &mut message.mode {
-            Mode::Inactive => return Ok(Status::Skip),
+            Mode::Inactive | Mode::Verifying(None) => return Ok(Status::Skip),
             Mode::Signing(signer) => {
                 signer.body_chunk(chunk)
             }
-            Mode::Verifying(verifier) => {
+            Mode::Verifying(Some(verifier)) => {
                 verifier.body_chunk(chunk)
             }
         };
@@ -387,7 +383,11 @@ impl Session {
                 }
             }
             Mode::Verifying(verifier) => {
-                let sigs = verifier.finish();
+                let sigs = if let Some(verifier) = verifier {
+                    verifier.finish()
+                } else {
+                    vec![]
+                };
 
                 for sig in &sigs {
                     // TODO
@@ -408,17 +408,15 @@ impl Session {
                     );
                 }
 
-                if !sigs.is_empty() {
-                    let ar = auth_results::assemble_auth_results(
-                        self.runtime.config.authserv_id.as_deref().unwrap_or("localhost"),
-                        sigs,
-                    );
+                let ar = auth_results::assemble_auth_results(
+                    self.runtime.config.authserv_id.as_deref().unwrap_or("localhost"),
+                    sigs,
+                );
 
-                    actions
-                        .insert_header(0, "Authentication-Results", ar)
-                        .await
-                        .map_err(|_| "failed to insert header")?;
-                }
+                actions
+                    .insert_header(0, "Authentication-Results", ar)
+                    .await
+                    .map_err(|_| "failed to insert header")?;
             }
         }
 

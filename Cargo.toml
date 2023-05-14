@@ -13,7 +13,7 @@ exclude = ["/.gitignore"]
 [dependencies]
 bstr = { version = "1.4.0", default-features = false, features = ["std"] }
 byte-strings = "0.2.2"
-domain = { version = "0.7.2", features = ["resolv"] }
+domain = { version = "0.8.0", features = ["resolv"] }
 futures = "0.3.27"
 idna = "0.3.0"  # do we still need this?
 indymilter = "0.2.0"
