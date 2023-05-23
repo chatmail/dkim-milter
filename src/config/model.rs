@@ -2,13 +2,16 @@ use regex::Regex;
 use std::{
     error::Error,
     fmt::{self, Debug, Display, Formatter},
+    num::{NonZeroU32, ParseIntError},
     str::FromStr,
     sync::Arc,
+    time::Duration,
 };
 use viadkim::{
-    header::{HeaderFieldError, FieldName},
-    crypto::SigningKey,
+    crypto::{HashAlgorithm, SigningKey},
+    header::{FieldName, HeaderFieldError},
     signature::{Canonicalization, CanonicalizationAlgorithm, DomainName, Selector},
+    signer,
 };
 
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
@@ -151,7 +154,7 @@ pub struct LogConfig {
 }
 
 // like viadkim's FieldName but does not allow ";" in name
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct SignedFieldName(FieldName);
 
 impl SignedFieldName {
@@ -233,7 +236,7 @@ impl FromStr for SignedHeaders {
 }
 
 // colon cannot appear in field names, so is a good choice for the separator
-fn split_at_colon(value: &str) -> impl Iterator<Item = Result<&str, ParseSignedHeaders>> {
+pub fn split_at_colon(value: &str) -> impl Iterator<Item = Result<&str, ParseSignedHeaders>> {
     let value = value.trim();
 
     let mut values = value.split(':');
@@ -254,10 +257,88 @@ fn split_at_colon(value: &str) -> impl Iterator<Item = Result<&str, ParseSignedH
     })
 }
 
+// TODO
+#[derive(Clone, Debug, PartialEq)]
+pub enum OversignedHeaders {
+    Pick(Vec<SignedFieldName>),
+}
+
+impl FromStr for OversignedHeaders {
+    type Err = ParseSignedHeaders;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        // assumes s is already trimmed
+
+        // parse colon-separated field name values
+        let result: Vec<_> = split_at_colon(s)
+            .map(|x| x.and_then(|s| SignedFieldName::new(s).map_err(|_| ParseSignedHeaders)))
+            .collect::<Result<_, _>>()?;
+        Ok(Self::Pick(result))
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
+pub struct ParseExpirationError;
+
+impl Error for ParseExpirationError {}
+
+impl Display for ParseExpirationError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "failed to parse expiration")
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Expiration {
+    Never,
+    After(Duration),  // non-zero
+}
+
+impl FromStr for Expiration {
+    type Err = ParseExpirationError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        // assumes s is already trimmed
+
+        if s == "never" {
+            return Ok(Self::Never);
+        }
+
+        let duration = parse_expiration_duration(s).map_err(|_| ParseExpirationError)?;
+
+        Ok(Self::After(duration))
+    }
+}
+
+fn parse_expiration_duration(s: &str) -> Result<Duration, ParseIntError> {
+    let seconds = if let Some(s) = s.strip_suffix("d") {
+        let days = NonZeroU32::from_str(s.trim_end())?;
+        let scale = NonZeroU32::new(24 * 60 * 60).unwrap();
+        days.saturating_mul(scale)
+    } else if let Some(s) = s.strip_suffix("h") {
+        let hours = NonZeroU32::from_str(s.trim_end())?;
+        let scale = NonZeroU32::new(60 * 60).unwrap();
+        hours.saturating_mul(scale)
+    } else if let Some(s) = s.strip_suffix("m") {
+        let minutes = NonZeroU32::from_str(s.trim_end())?;
+        let scale = NonZeroU32::new(60).unwrap();
+        minutes.saturating_mul(scale)
+    } else {
+        let s = s.strip_suffix("s").unwrap_or(s);
+        NonZeroU32::from_str(s.trim_end())?
+    };
+    Ok(Duration::from_secs(seconds.get().into()))
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct SigningConfig {
+    pub default_signed_headers: Vec<SignedFieldName>,  // must include From
+    pub default_unsigned_headers: Vec<SignedFieldName>,  // must not include From
     pub signed_headers: SignedHeaders,
+    pub oversigned_headers: OversignedHeaders,
+    pub hash_algorithm: HashAlgorithm,
     pub canonicalization: Canonicalization,
+    pub expire_after: Expiration,
     pub copy_headers: bool,
     pub limit_body_length: bool,
 }
@@ -265,11 +346,26 @@ pub struct SigningConfig {
 impl SigningConfig {
     pub fn combine_with(&self, overrides: &SigningConfigOverrides) -> Self {
         let mut config = self.clone();
+        if let Some(default_signed_headers) = &overrides.default_signed_headers {
+            config.default_signed_headers = default_signed_headers.clone();
+        }
+        if let Some(default_unsigned_headers) = &overrides.default_unsigned_headers {
+            config.default_unsigned_headers = default_unsigned_headers.clone();
+        }
         if let Some(signed_headers) = &overrides.signed_headers {
             config.signed_headers = signed_headers.clone();
         }
+        if let Some(oversigned_headers) = &overrides.oversigned_headers {
+            config.oversigned_headers = oversigned_headers.clone();
+        }
+        if let Some(hash_algorithm) = overrides.hash_algorithm {
+            config.hash_algorithm = hash_algorithm;
+        }
         if let Some(canonicalization) = overrides.canonicalization {
             config.canonicalization = canonicalization;
+        }
+        if let Some(expire_after) = overrides.expire_after {
+            config.expire_after = expire_after;
         }
         if let Some(copy_headers) = overrides.copy_headers {
             config.copy_headers = copy_headers;
@@ -284,11 +380,20 @@ impl SigningConfig {
 impl Default for SigningConfig {
     fn default() -> Self {
         Self {
+            default_signed_headers: signer::default_signed_headers().into_iter()
+                .map(|f| SignedFieldName(f))
+                .collect(),
+            default_unsigned_headers: signer::default_unsigned_headers().into_iter()
+                .map(|f| SignedFieldName(f))
+                .collect(),
             signed_headers: SignedHeaders::PickWithDefault(Default::default()),
+            oversigned_headers: OversignedHeaders::Pick(Default::default()),
+            hash_algorithm: HashAlgorithm::Sha256,
             canonicalization: Canonicalization {
                 header: CanonicalizationAlgorithm::Relaxed,
                 body: CanonicalizationAlgorithm::Simple,
             },
+            expire_after: Expiration::After(Duration::from_secs(60 * 60 * 24 * 5)),  // five days
             copy_headers: false,
             limit_body_length: false,
         }
@@ -297,8 +402,13 @@ impl Default for SigningConfig {
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct SigningConfigOverrides {
+    pub default_signed_headers: Option<Vec<SignedFieldName>>,
+    pub default_unsigned_headers: Option<Vec<SignedFieldName>>,
     pub signed_headers: Option<SignedHeaders>,
+    pub oversigned_headers: Option<OversignedHeaders>,
+    pub hash_algorithm: Option<HashAlgorithm>,
     pub canonicalization: Option<Canonicalization>,
+    pub expire_after: Option<Expiration>,
     pub copy_headers: Option<bool>,
     pub limit_body_length: Option<bool>,
 }
@@ -306,11 +416,26 @@ pub struct SigningConfigOverrides {
 impl SigningConfigOverrides {
     pub fn into_signing_config(self) -> SigningConfig {
         let mut config = SigningConfig::default();
+        if let Some(default_signed_headers) = self.default_signed_headers {
+            config.default_signed_headers = default_signed_headers;
+        }
+        if let Some(default_unsigned_headers) = self.default_unsigned_headers {
+            config.default_unsigned_headers = default_unsigned_headers;
+        }
         if let Some(signed_headers) = self.signed_headers {
             config.signed_headers = signed_headers;
         }
+        if let Some(oversigned_headers) = self.oversigned_headers {
+            config.oversigned_headers = oversigned_headers;
+        }
+        if let Some(hash_algorithm) = self.hash_algorithm {
+            config.hash_algorithm = hash_algorithm;
+        }
         if let Some(canonicalization) = self.canonicalization {
             config.canonicalization = canonicalization;
+        }
+        if let Some(expire_after) = self.expire_after {
+            config.expire_after = expire_after;
         }
         if let Some(copy_headers) = self.copy_headers {
             config.copy_headers = copy_headers;

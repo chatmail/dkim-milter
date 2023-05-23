@@ -17,6 +17,8 @@ This section lists all available configuration parameters in alphabetical order.
 Possible values for each parameter are given in parentheses.
 .PP
 To do.
+.SS General parameters
+To do.
 .TP
 .BR authserv_id " (\fIstring\fR)"
 The
@@ -33,6 +35,24 @@ value.
 Defaults to the
 .B hostname
 setting.
+.SS Signing parameters
+To do.
+.TP
+.BR default_unsigned_headers " (\fIcolon-separated\fR)"
+To do.
+.TP
+.BR default_signed_headers " (\fIcolon-separated\fR)"
+To do.
+.TP
+.BR signed_headers " (\fIcolon-separated\fR)"
+To do.
+Values are:
+.BR default ,
+the default set of headers;
+.BR all ,
+all headers present, minus the set of excluded headers;
+.IR colon-separated ,
+the listed headers.
 .SH FILES
 .I /etc/dkim-milter/dkim-milter.conf
 .SH SEE ALSO

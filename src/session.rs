@@ -2,24 +2,23 @@ use crate::{
     auth_results,
     config::{
         model::{
-            OperationMode, SigningConfig, SigningConfigOverrides, SigningOverrides, SigningSenders,
-            SignedHeaders,
+            Expiration, OperationMode, OversignedHeaders, SignedHeaders, SigningConfig,
+            SigningConfigOverrides, SigningOverrides, SigningSenders,
         },
-        RuntimeConfig,
+        Config, RuntimeConfig,
     },
     format::{self, EmailAddr},
     resolver::Resolver,
 };
 use bstr::ByteSlice;
 use indymilter::{ContextActions, Status};
+use log::{debug, error, info, warn};
 use std::{borrow::Cow, cmp, collections::HashSet, error::Error, mem, net::IpAddr, sync::Arc};
-use log::{debug, error, info};
 use viadkim::{
-    crypto::HashAlgorithm,
-    header::{FieldBody, FieldName, HeaderFields},
+    header::{self, FieldBody, FieldName, HeaderFields},
     message_hash::BodyHasherStance,
     signature::{DomainName, Selector, SignatureAlgorithm},
-    signer::{self, BodyLength, HeaderSelection, OversignStrategy, SignRequest, SigningStatus},
+    signer::{BodyLength, HeaderSelection, OversignStrategy, SignRequest, SigningStatus},
     verifier::{self, VerificationResult, VerificationStatus, VerifierError},
     Signer, SigningKey, Verifier,
 };
@@ -46,6 +45,10 @@ struct ConnectionData {
 impl ConnectionData {
     fn new() -> Self {
         Default::default()
+    }
+
+    fn hostname(&self) -> &str {
+        self.hostname.as_deref().expect("no hostname available")
     }
 }
 
@@ -190,6 +193,11 @@ impl Session {
             }
         };
 
+        if let Err(e) = header::validate_rfc5322(&headers) {
+            // For now, simply log that we are proceeding with an ill-formed header.
+            info!("{id}: proceeding with header not conforming to RFC 5322: {e}");
+        }
+
         match self.runtime.config.mode {
             OperationMode::Auto | OperationMode::Sign => {
                 // local and authenticated senders are authorised
@@ -290,9 +298,14 @@ impl Session {
                 }
             };
 
-            let request = make_sign_request(&config, domain, selector, signing_key);
-
-            requests.push(request);
+            match make_sign_request(&config, domain, selector, signing_key) {
+                Ok(request) => {
+                    requests.push(request);
+                }
+                Err(e) => {
+                    warn!("failed to create sign request, ignoring request: {e}");
+                }
+            }
         }
 
         let signer = Signer::prepare_signing(requests, headers)
@@ -408,10 +421,8 @@ impl Session {
                     );
                 }
 
-                let ar = auth_results::assemble_auth_results(
-                    self.runtime.config.authserv_id.as_deref().unwrap_or("localhost"),
-                    sigs,
-                );
+                let authserv_id = authserv_id(&self.runtime.config, self.conn.hostname());
+                let ar = auth_results::assemble_auth_results(authserv_id, sigs);
 
                 actions
                     .insert_header(0, "Authentication-Results", ar)
@@ -422,6 +433,10 @@ impl Session {
 
         Ok(Status::Continue)
     }
+}
+
+fn authserv_id<'a>(config: &'a Config, hostname: &'a str) -> &'a str {
+    config.authserv_id.as_deref().unwrap_or(hostname)
 }
 
 #[derive(Clone, Debug)]
@@ -481,20 +496,30 @@ fn make_sign_request(
     domain: DomainName,
     selector: Selector,
     signing_key: Arc<SigningKey>,
-) -> SignRequest<Arc<SigningKey>> {
+) -> Result<SignRequest<Arc<SigningKey>>, Box<dyn Error>> {
     let key_type = signing_key.key_type();
 
-    let signature_alg = SignatureAlgorithm::from_parts(key_type, HashAlgorithm::Sha256).unwrap();
+    let hash_algorithm = config.hash_algorithm;
+    let signature_alg = SignatureAlgorithm::from_parts(key_type, hash_algorithm)
+        .ok_or_else(|| "invalid key type/hash algorithm pair")?;
 
     let mut request = SignRequest::new(domain, selector, signature_alg, signing_key);
 
     request.canonicalization = config.canonicalization;
+
+    request.valid_duration = match config.expire_after {
+        Expiration::Never => None,
+        Expiration::After(duration) => Some(duration),
+    };
+
     request.copy_headers = config.copy_headers;
     if config.limit_body_length {
         request.body_length = BodyLength::OnlyMessageLength;
     }
 
-    let oversigned_headers = HashSet::from([FieldName::new("From").unwrap()]);
+    let oversigned_headers = match &config.oversigned_headers {
+        OversignedHeaders::Pick(names) => names.into_iter().map(|n| n.as_ref().clone()).collect(),
+    };
 
     match &config.signed_headers {
         SignedHeaders::Pick(names) => {
@@ -505,7 +530,8 @@ fn make_sign_request(
             };
         }
         SignedHeaders::PickWithDefault(names) => {
-            let mut signed_headers: HashSet<_> = signer::get_default_signed_headers().into_iter().collect();
+            let mut signed_headers: HashSet<_> =
+                config.default_signed_headers.iter().map(|n| n.as_ref().clone()).collect();
             for name in names {
                 signed_headers.insert(name.as_ref().clone());
             }
@@ -515,15 +541,16 @@ fn make_sign_request(
             };
         }
         SignedHeaders::All => {
-            let excluded_headers: HashSet<_> = signer::get_default_excluded_headers().into_iter().collect();
+            let unsigned_headers: HashSet<_> =
+                config.default_unsigned_headers.iter().map(|n| n.as_ref().clone()).collect();
             request.header_selection = HeaderSelection::All {
-                exclude: excluded_headers,
+                exclude: unsigned_headers,
                 oversign: OversignStrategy::Selected(oversigned_headers),
             };
         }
     }
 
-    request
+    Ok(request)
 }
 
 pub fn get_domain_from_verification_result(res: &VerificationResult) -> String {

@@ -1,7 +1,8 @@
 use crate::config::{
     model::{
-        LogConfig, LogDestination, LogLevel, OperationMode, OverrideEntry, SignedHeaders,
-        SigningConfig, SigningConfigOverrides, Socket, VerificationConfig,
+        self, LogConfig, LogDestination, LogLevel, OperationMode, OverrideEntry, Expiration, OversignedHeaders,
+        ParseSignedHeaders, SignedFieldName, SignedHeaders, SigningConfig, SigningConfigOverrides,
+        Socket, VerificationConfig,
     },
     read, CliOptions, Config, ConfigError, ConfigErrorKind,
 };
@@ -15,7 +16,7 @@ use std::{
     str::FromStr,
 };
 use viadkim::{
-    crypto::SigningKey,
+    crypto::{HashAlgorithm, SigningKey},
     signature::{Canonicalization, DomainName, Selector},
 };
 
@@ -57,7 +58,11 @@ impl Error for ParseConfigError {
             | InvalidSocket(_)
             | InvalidBoolean(_)
             | InvalidSignedHeaders(_)
+            | SignedHeadersMissingFrom(_)
+            | FromInUnsignedHeaders(_)
+            | InvalidHashAlgorithm(_)
             | InvalidCanonicalization(_)
+            | InvalidExpiration(_)
             | InvalidMode(_) => None,
             ReadSigningKeys(e) | ReadSigningSenders(e) | ReadRecipientOverrides(e) => Some(e),
         }
@@ -81,7 +86,11 @@ impl Display for ParseConfigError {
             | InvalidSocket(_)
             | InvalidBoolean(_)
             | InvalidSignedHeaders(_)
+            | SignedHeadersMissingFrom(_)
+            | FromInUnsignedHeaders(_)
+            | InvalidHashAlgorithm(_)
             | InvalidCanonicalization(_)
+            | InvalidExpiration(_)
             | InvalidMode(_) => write!(f, ": {}", self.kind),
             _ => Ok(()),
         }
@@ -103,7 +112,11 @@ pub enum ParseParamError {
     InvalidSocket(String),
     InvalidBoolean(String),
     InvalidSignedHeaders(String),
+    SignedHeadersMissingFrom(String),
+    FromInUnsignedHeaders(String),
+    InvalidHashAlgorithm(String),
     InvalidCanonicalization(String),
+    InvalidExpiration(String),
     InvalidMode(String),
 
     ReadSigningKeys(TableError),
@@ -129,7 +142,11 @@ impl Display for ParseParamError {
             Self::InvalidSocket(s) => write!(f, "invalid socket \"{s}\""),
             Self::InvalidBoolean(s) => write!(f, "invalid Boolean value \"{s}\""),
             Self::InvalidSignedHeaders(s) => write!(f, "invalid signed headers \"{s}\""),
+            Self::SignedHeadersMissingFrom(_s) => write!(f, "signed headers are missing required header From"),
+            Self::FromInUnsignedHeaders(_s) => write!(f, "unsigned headers contain required header From"),
+            Self::InvalidHashAlgorithm(s) => write!(f, "invalid hash algorithm \"{s}\""),
             Self::InvalidCanonicalization(s) => write!(f, "invalid canonicalization \"{s}\""),
+            Self::InvalidExpiration(s) => write!(f, "invalid expiration duration \"{s}\""),
             Self::InvalidMode(s) => write!(f, "invalid operation mode \"{s}\""),
 
             Self::ReadSigningKeys(_) => write!(f, "failed to read signing keys"),
@@ -551,8 +568,13 @@ async fn parse_config_section_signing(
 async fn parse_config_section_signing_overrides(
     iter: &mut impl Iterator<Item = (usize, &str)>,
 ) -> Result<(SigningConfigOverrides, Option<String>), ParseConfigError> {
+    let mut default_signed_headers = None;
+    let mut default_unsigned_headers = None;
     let mut signed_headers = None;
+    let mut oversigned_headers = None;
+    let mut hash_algorithm = None;
     let mut canonicalization = None;
+    let mut expire_after = None;
     let mut copy_headers = None;
     let mut limit_body_length = None;
 
@@ -579,6 +601,42 @@ async fn parse_config_section_signing_overrides(
                 }
 
                 match k {
+                    "default_signed_headers" => {
+                        let value: Vec<_> = model::split_at_colon(v)
+                            .map(|s| {
+                                s.and_then(|s| SignedFieldName::new(s).map_err(|_| ParseSignedHeaders))
+                            })
+                            .collect::<Result<_, _>>()
+                            .map_err(|_| ParseConfigError {
+                                line: num,
+                                kind: ParseParamError::InvalidSignedHeaders(v.into()),
+                            })?;
+                        if !value.iter().any(|n| *n.as_ref() == "From") {
+                            return Err(ParseConfigError {
+                                line: num,
+                                kind: ParseParamError::SignedHeadersMissingFrom(v.into()),
+                            });
+                        }
+                        default_signed_headers = Some(value);
+                    }
+                    "default_unsigned_headers" => {
+                        let value: Vec<_> = model::split_at_colon(v)
+                            .map(|s| {
+                                s.and_then(|s| SignedFieldName::new(s).map_err(|_| ParseSignedHeaders))
+                            })
+                            .collect::<Result<_, _>>()
+                            .map_err(|_| ParseConfigError {
+                                line: num,
+                                kind: ParseParamError::InvalidSignedHeaders(v.into()),
+                            })?;
+                        if value.iter().any(|n| *n.as_ref() == "From") {
+                            return Err(ParseConfigError {
+                                line: num,
+                                kind: ParseParamError::FromInUnsignedHeaders(v.into()),
+                            });
+                        }
+                        default_unsigned_headers = Some(value);
+                    }
                     "signed_headers" => {
                         let value =
                             SignedHeaders::from_str(v).map_err(|_| ParseConfigError {
@@ -587,6 +645,28 @@ async fn parse_config_section_signing_overrides(
                             })?;
                         signed_headers = Some(value);
                     }
+                    "oversigned_headers" => {
+                        let value =
+                            OversignedHeaders::from_str(v).map_err(|_| ParseConfigError {
+                                line: num,
+                                kind: ParseParamError::InvalidSignedHeaders(v.into()),
+                            })?;
+                        oversigned_headers = Some(value);
+                    }
+                    "hash_algorithm" => {
+                        let value = match v {
+                            "sha256" => HashAlgorithm::Sha256,
+                            #[cfg(feature = "sha1")]
+                            "sha1" => HashAlgorithm::Sha1,
+                            _ => {
+                                return Err(ParseConfigError {
+                                    line: num,
+                                    kind: ParseParamError::InvalidHashAlgorithm(v.into()),
+                                });
+                            }
+                        };
+                        hash_algorithm = Some(value);
+                    }
                     "canonicalization" => {
                         let value =
                             Canonicalization::from_str(v).map_err(|_| ParseConfigError {
@@ -594,6 +674,14 @@ async fn parse_config_section_signing_overrides(
                                 kind: ParseParamError::InvalidCanonicalization(v.into()),
                             })?;
                         canonicalization = Some(value);
+                    }
+                    "expire_after" => {
+                        let value =
+                            Expiration::from_str(v).map_err(|_| ParseConfigError {
+                                line: num,
+                                kind: ParseParamError::InvalidExpiration(v.into()),
+                            })?;
+                        expire_after = Some(value);
                     }
                     "copy_headers" => {
                         let value = parse_boolean(v).map_err(|_| ParseConfigError {
@@ -629,8 +717,13 @@ async fn parse_config_section_signing_overrides(
     }
 
     let signing_config = SigningConfigOverrides {
+        default_signed_headers,
+        default_unsigned_headers,
         signed_headers,
+        oversigned_headers,
+        hash_algorithm,
         canonicalization,
+        expire_after,
         copy_headers,
         limit_body_length,
     };
