@@ -1,12 +1,10 @@
 # DKIM Milter
 
-<br>
+### 🚧
 
-🚧
+### *experimental, in development*
 
-***experimental, in development***
-
-🏗
+### 🏗
 
 <br>
 
@@ -35,8 +33,8 @@ inspired some choices made here.
 
 TODO
 
-DKIM Milter must be built or run from source code for now (initial development,
-alpha quality).
+DKIM Milter must be built or run from source code for now (initial development;
+working, but alpha quality).
 
 A source checkout of viadkim in a sibling directory is also required.
 
@@ -76,12 +74,8 @@ TODO
 
 The configuration is currently entirely file-based.
 
-Overview of the configuration design:
-
-* main configuration file:
-  * default section
-  * signing section, introduced by `[signing]`
-  * verification section, introduced by `[verification]`
+The configuration consists at the minimum of the main configuration file
+`dkim-milter.conf`.
 
 The main configuration file contains global settings.
 
@@ -94,29 +88,37 @@ enable it for certain recipients only.
 Overrides can be applied to recipients (given in the `RCPT TO:` SMTP command),
 and to senders (in the *Sender* or *From* headers).
 
-This design, with main config whose `[signing]`/`[verification]` parameters can
-be overridden with some granularity, should be flexible enough to implement many
-configuration requirements.
+This design, with main config whose parameters can be overridden with some
+granularity, should be flexible enough to implement many configuration
+requirements.
 
 ### Sign/verify decision
-
-TODO
 
 For all messages passed to DKIM Milter, the decision whether the message should
 undergo verification or signing is made in the following way.
 
-If a message comes from an *authorised* source and is submitted by an
-*originator* that matches a configured *signing sender*, then the message is
-signed; in all other cases, the message is verified instead. A message is
-*authorised* if it comes from a local IP address or is submitted by an
-authenticated sender. The *originator* of a message is taken from the message’s
-*Sender* header if present, else from the message’s *From* header. (Usually,
-*Sender* is not present, so the originator will be taken from *From*; however,
-if *From* contains multiple mailboxes, *Sender* must be included according to
-RFC 5322, and thus the originator will then be taken from *Sender*.)
+If a message comes from a *trusted source* and is submitted by an *originator*
+that matches a configured *signing sender*, then the message is signed. If a
+message comes from an untrusted source, it is verified instead. In other words,
+a message from a trusted source is authorised or eligible for signing; it is not
+eligible for verification.
 
-Some of the above will be made configurable in the future. The operating mode
-can also be configured with the `mode` parameter.
+A *trusted source* is either a connection from an IP address in
+`trusted_networks` (default: loopback), or, if `trust_authenticated_senders` is
+set (default: yes), a sender that has been authenticated.
+
+The *originator* of a message is taken from the message’s *Sender* header if
+present, else from the message’s *From* header. (Usually, *Sender* is not
+present, so the originator will be taken from *From*; however, if *From*
+contains multiple mailboxes, *Sender* must be included according to RFC 5322,
+and thus the originator will then be taken from *Sender*.)
+
+*Signing senders* are senders (domains or email addresses) for which a signing
+key and signing configuration have been set up. They are configured in the table
+referenced by parameter `signing_senders`.
+
+The operating mode (sign-only, verify-only, or automatic per the above
+procedure) can also be configured with the `mode` parameter.
 
 ### Basic usage
 
@@ -158,7 +160,8 @@ to a PKCS#8 PEM file. The signing key type (RSA or Ed25519) is detected
 automatically.
 
 Additional per-signature (ie, per sender expression match) configuration
-overrides are in `signature_settings` (not implemented).
+overrides can be specified in the optional fifth column in the `signing_senders`
+file.
 
 ## Key setup
 

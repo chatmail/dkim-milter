@@ -1,5 +1,4 @@
-use crate::session;
-use log::debug;
+use crate::verify;
 use std::fmt::Write;
 use viadkim::verifier::{AuthResultsKind, VerificationResult, VerificationStatus};
 
@@ -21,13 +20,15 @@ pub fn assemble_auth_results(authserv_id: &str, sigs: Vec<VerificationResult>) -
         write!(result, "; dkim={ar}").unwrap();
     } else {
         for sig in sigs {
-            debug!("signature result: {:?}", sig.status);
-
             result.push_str(";\n\t");
 
             let ar = sig.status.to_auth_results_kind();
 
             write!(result, "dkim={ar}").unwrap();
+
+            if sig.testing {
+                write!(result, " (testing mode)").unwrap();
+            }
 
             if let Some(reason) = auth_results_reason_from_status(&sig.status) {
                 write!(result, " reason=\"{reason}\"").unwrap();
@@ -41,10 +42,10 @@ pub fn assemble_auth_results(authserv_id: &str, sigs: Vec<VerificationResult>) -
             write!(
                 result,
                 " header.d={}",
-                session::get_domain_from_verification_result(&sig),
+                verify::get_domain_from_verification_result(&sig),
             ).unwrap();
 
-            if let Some(s) = session::get_signature_prefix_from_verification_result(&sig) {
+            if let Some(s) = verify::get_signature_prefix_from_verification_result(&sig) {
                 write!(result, " header.b={s}").unwrap();
             }
         }

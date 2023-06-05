@@ -1,8 +1,10 @@
+use ipnet::IpNet;
 use regex::Regex;
 use std::{
+    collections::HashSet,
     error::Error,
     fmt::{self, Debug, Display, Formatter},
-    num::{NonZeroU32, ParseIntError},
+    net::IpAddr,
     str::FromStr,
     sync::Arc,
     time::Duration,
@@ -13,6 +15,9 @@ use viadkim::{
     signature::{Canonicalization, CanonicalizationAlgorithm, DomainName, Selector},
     signer,
 };
+
+// Provide FromStr impl only for types that have an ‘atomic’, ‘natural’, obvious
+// string representation.
 
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
 pub struct ParseLogDestinationError;
@@ -27,10 +32,6 @@ impl Display for ParseLogDestinationError {
 
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
 pub enum LogDestination {
-    /*
-    #[default]
-    Journald,
-    */
     #[default]
     Syslog,
     Stderr,
@@ -41,9 +42,6 @@ impl FromStr for LogDestination {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
-            /*
-            "journald" => Ok(Self::Journald),
-            */
             "syslog" => Ok(Self::Syslog),
             "stderr" => Ok(Self::Stderr),
             _ => Err(ParseLogDestinationError),
@@ -127,10 +125,10 @@ impl FromStr for Socket {
 
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
 pub enum OperationMode {
+    Sign,
+    Verify,
     #[default]
-    Auto,  // sign if matching signing senders, verify otherwise
-    Verify,  // always verify, no signing
-    Sign,  // sign if matching signing senders, no verifying
+    Auto,
 }
 
 impl FromStr for OperationMode {
@@ -138,23 +136,42 @@ impl FromStr for OperationMode {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
-            "auto" => Ok(Self::Auto),
-            "verify" => Ok(Self::Verify),
             "sign" => Ok(Self::Sign),
+            "verify" => Ok(Self::Verify),
+            "auto" => Ok(Self::Auto),
             _ => Err("unknown mode"),
         }
     }
 }
 
-// TODO read log config, before other config (config reading requires logging)
-#[derive(Clone, Debug)]
-pub struct LogConfig {
-    pub log_destination: LogDestination,
-    pub log_level: LogLevel,
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TrustedNetworks {
+    pub trust_loopback: bool,
+    pub networks: HashSet<IpNet>,
+}
+
+impl TrustedNetworks {
+    pub fn contains(&self, addr: IpAddr) -> bool {
+        self.trust_loopback && addr.is_loopback() || self.networks.iter().any(|n| n.contains(&addr))
+    }
+
+    pub fn contains_loopback(&self) -> bool {
+        // TODO pedantically, loopback could also be present as literals in self.networks
+        self.trust_loopback
+    }
+}
+
+impl Default for TrustedNetworks {
+    fn default() -> Self {
+        Self {
+            trust_loopback: true,
+            networks: Default::default(),
+        }
+    }
 }
 
 // like viadkim's FieldName but does not allow ";" in name
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Eq, Hash, PartialEq)]
 pub struct SignedFieldName(FieldName);
 
 impl SignedFieldName {
@@ -173,161 +190,30 @@ impl AsRef<FieldName> for SignedFieldName {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
-pub struct ParseSignedHeaders;
-
-impl Error for ParseSignedHeaders {}
-
-impl Display for ParseSignedHeaders {
+impl fmt::Debug for SignedFieldName {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        write!(f, "failed to parse signed headers")
+        write!(f, "{:?}", self.0)
     }
 }
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum SignedHeaders {
-    Pick(Vec<SignedFieldName>),  // must contain From
-    PickWithDefault(Vec<SignedFieldName>),  // need not contain From
+    Pick(Vec<SignedFieldName>),  // must include From
+    PickWithDefault(Vec<SignedFieldName>),  // From stripped (already in default)
     All,
 }
 
-impl FromStr for SignedHeaders {
-    type Err = ParseSignedHeaders;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        // assumes s is already trimmed
-
-        if let Some(rest) = s.strip_prefix("default") {
-            if rest.is_empty() {
-                return Ok(Self::PickWithDefault(vec![]));
-            }
-
-            let s = rest.trim_start();
-            if let Some(rest) = s.strip_prefix(';') {
-                let s = rest.trim_start();
-
-                // now treat s as colon-separated field name values
-                let result = split_at_colon(s)
-                    .map(|x| {
-                        x.and_then(|s| SignedFieldName::new(s).map_err(|_| ParseSignedHeaders))
-                    })
-                .collect::<Result<_, _>>()?;
-                return Ok(Self::PickWithDefault(result));
-            }
-        } else if let Some(rest) = s.strip_prefix("all") {
-            if rest.is_empty() {
-                return Ok(Self::All);
-            }
-        } else {
-            // parse colon-separated field name values
-            let result: Vec<_> = split_at_colon(s)
-                .map(|x| {
-                    x.and_then(|s| SignedFieldName::new(s).map_err(|_| ParseSignedHeaders))
-                })
-                .collect::<Result<_, _>>()?;
-            if !result.iter().any(|n| *n.as_ref() == "From") {
-                return Err(ParseSignedHeaders);
-            }
-            return Ok(Self::Pick(result));
-        }
-
-        Err(ParseSignedHeaders)
-    }
-}
-
-// colon cannot appear in field names, so is a good choice for the separator
-pub fn split_at_colon(value: &str) -> impl Iterator<Item = Result<&str, ParseSignedHeaders>> {
-    let value = value.trim();
-
-    let mut values = value.split(':');
-
-    // If the value is empty, `split` will yield one empty string slice. In that
-    // case, drop this string so that the iterator becomes empty.
-    if value.is_empty() {
-        values.next();
-    }
-
-    values.map(|s| {
-        let s = s.trim();
-        if s.is_empty() {
-            Err(ParseSignedHeaders)
-        } else {
-            Ok(s)
-        }
-    })
-}
-
-// TODO
 #[derive(Clone, Debug, PartialEq)]
 pub enum OversignedHeaders {
     Pick(Vec<SignedFieldName>),
-}
-
-impl FromStr for OversignedHeaders {
-    type Err = ParseSignedHeaders;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        // assumes s is already trimmed
-
-        // parse colon-separated field name values
-        let result: Vec<_> = split_at_colon(s)
-            .map(|x| x.and_then(|s| SignedFieldName::new(s).map_err(|_| ParseSignedHeaders)))
-            .collect::<Result<_, _>>()?;
-        Ok(Self::Pick(result))
-    }
-}
-
-#[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
-pub struct ParseExpirationError;
-
-impl Error for ParseExpirationError {}
-
-impl Display for ParseExpirationError {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        write!(f, "failed to parse expiration")
-    }
+    Signed,
+    Exhaustive,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Expiration {
     Never,
     After(Duration),  // non-zero
-}
-
-impl FromStr for Expiration {
-    type Err = ParseExpirationError;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        // assumes s is already trimmed
-
-        if s == "never" {
-            return Ok(Self::Never);
-        }
-
-        let duration = parse_expiration_duration(s).map_err(|_| ParseExpirationError)?;
-
-        Ok(Self::After(duration))
-    }
-}
-
-fn parse_expiration_duration(s: &str) -> Result<Duration, ParseIntError> {
-    let seconds = if let Some(s) = s.strip_suffix("d") {
-        let days = NonZeroU32::from_str(s.trim_end())?;
-        let scale = NonZeroU32::new(24 * 60 * 60).unwrap();
-        days.saturating_mul(scale)
-    } else if let Some(s) = s.strip_suffix("h") {
-        let hours = NonZeroU32::from_str(s.trim_end())?;
-        let scale = NonZeroU32::new(60 * 60).unwrap();
-        hours.saturating_mul(scale)
-    } else if let Some(s) = s.strip_suffix("m") {
-        let minutes = NonZeroU32::from_str(s.trim_end())?;
-        let scale = NonZeroU32::new(60).unwrap();
-        minutes.saturating_mul(scale)
-    } else {
-        let s = s.strip_suffix("s").unwrap_or(s);
-        NonZeroU32::from_str(s.trim_end())?
-    };
-    Ok(Duration::from_secs(seconds.get().into()))
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -344,7 +230,42 @@ pub struct SigningConfig {
 }
 
 impl SigningConfig {
-    pub fn combine_with(&self, overrides: &SigningConfigOverrides) -> Self {
+    fn check_invariants(&self) -> Result<(), Box<dyn Error>> {
+        match (&self.oversigned_headers, &self.signed_headers) {
+            (
+                OversignedHeaders::Pick(oversigned_names),
+                s @ (SignedHeaders::Pick(names) | SignedHeaders::PickWithDefault(names)),
+            ) => {
+                let mut all_signed: HashSet<_> = names.iter().collect();
+                if matches!(s, SignedHeaders::PickWithDefault(_)) {
+                    all_signed.extend(self.default_signed_headers.iter());
+                }
+                for h in oversigned_names {
+                    if !all_signed.contains(h) {
+                        return Err("cannot oversign header not included for signing".into());
+                    }
+                }
+            }
+            (OversignedHeaders::Pick(oversigned_names), SignedHeaders::All) => {
+                for h in oversigned_names {
+                    if self.default_unsigned_headers.contains(h) {
+                        return Err("cannot oversign header expressly excluded from signing".into());
+                    }
+                }
+            }
+            (OversignedHeaders::Exhaustive, SignedHeaders::All) => {
+                for h in &self.default_signed_headers {
+                    if self.default_unsigned_headers.contains(h) {
+                        return Err("cannot oversign header expressly excluded from signing".into());
+                    }
+                }
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    pub fn combine_with(&self, overrides: &PartialSigningConfig) -> Result<Self, Box<dyn Error>> {
         let mut config = self.clone();
         if let Some(default_signed_headers) = &overrides.default_signed_headers {
             config.default_signed_headers = default_signed_headers.clone();
@@ -373,7 +294,10 @@ impl SigningConfig {
         if let Some(limit_body_length) = overrides.limit_body_length {
             config.limit_body_length = limit_body_length;
         }
-        config
+
+        config.check_invariants()?;
+
+        Ok(config)
     }
 }
 
@@ -381,10 +305,10 @@ impl Default for SigningConfig {
     fn default() -> Self {
         Self {
             default_signed_headers: signer::default_signed_headers().into_iter()
-                .map(|f| SignedFieldName(f))
+                .map(SignedFieldName)
                 .collect(),
             default_unsigned_headers: signer::default_unsigned_headers().into_iter()
-                .map(|f| SignedFieldName(f))
+                .map(SignedFieldName)
                 .collect(),
             signed_headers: SignedHeaders::PickWithDefault(Default::default()),
             oversigned_headers: OversignedHeaders::Pick(Default::default()),
@@ -401,7 +325,7 @@ impl Default for SigningConfig {
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
-pub struct SigningConfigOverrides {
+pub struct PartialSigningConfig {
     pub default_signed_headers: Option<Vec<SignedFieldName>>,
     pub default_unsigned_headers: Option<Vec<SignedFieldName>>,
     pub signed_headers: Option<SignedHeaders>,
@@ -413,8 +337,30 @@ pub struct SigningConfigOverrides {
     pub limit_body_length: Option<bool>,
 }
 
-impl SigningConfigOverrides {
-    pub fn into_signing_config(self) -> SigningConfig {
+impl PartialSigningConfig {
+    pub fn combine_with(&self, overrides: &PartialSigningConfig) -> Self {
+        PartialSigningConfig {
+            default_signed_headers: overrides.default_signed_headers.as_ref()
+                .or(self.default_signed_headers.as_ref())
+                .cloned(),
+            default_unsigned_headers: overrides.default_unsigned_headers.as_ref()
+                .or(self.default_unsigned_headers.as_ref())
+                .cloned(),
+            signed_headers: overrides.signed_headers.as_ref()
+                .or(self.signed_headers.as_ref())
+                .cloned(),
+            oversigned_headers: overrides.oversigned_headers.as_ref()
+                .or(self.oversigned_headers.as_ref())
+                .cloned(),
+            hash_algorithm: overrides.hash_algorithm.or(self.hash_algorithm),
+            canonicalization: overrides.canonicalization.or(self.canonicalization),
+            expire_after: overrides.expire_after.or(self.expire_after),
+            copy_headers: overrides.copy_headers.or(self.copy_headers),
+            limit_body_length: overrides.limit_body_length.or(self.limit_body_length),
+        }
+    }
+
+    pub fn into_signing_config(self) -> Result<SigningConfig, Box<dyn Error>> {
         let mut config = SigningConfig::default();
         if let Some(default_signed_headers) = self.default_signed_headers {
             config.default_signed_headers = default_signed_headers;
@@ -443,31 +389,17 @@ impl SigningConfigOverrides {
         if let Some(limit_body_length) = self.limit_body_length {
             config.limit_body_length = limit_body_length;
         }
-        config
+
+        config.check_invariants()?;
+
+        Ok(config)
     }
 }
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct VerificationConfig {
-}
-
-impl Default for VerificationConfig {
-    fn default() -> Self {
-        Self {
-        }
-    }
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct VerificationConfigOverrides {
-}
-
-// ...
 
 #[derive(Clone, Debug)]
 pub struct OverrideEntry {
     pub expr: Regex,
-    pub config: SigningConfigOverrides,
+    pub config: PartialSigningConfig,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -488,5 +420,5 @@ pub struct SenderEntry {
     pub selector: Selector,
     // TODO no longer "_name"
     pub key_name: Arc<SigningKey>,
-    pub signing_config: Option<SigningConfigOverrides>,
+    pub signing_config: Option<PartialSigningConfig>,
 }

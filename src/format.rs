@@ -1,5 +1,6 @@
 use std::{
     fmt::{self, Display, Formatter},
+    error::Error,
     str,
 };
 use viadkim::signature::DomainName;
@@ -55,6 +56,18 @@ pub enum ParseHeaderFromError {
     DomainLiteral,
     Syntax,
     InvalidDomain,
+}
+
+impl Error for ParseHeaderFromError {}
+
+impl Display for ParseHeaderFromError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::DomainLiteral => write!(f, "mailbox domain is literal"),
+            Self::Syntax => write!(f, "failed to parse mailbox"),
+            Self::InvalidDomain => write!(f, "failed to parse mailbox domain"),
+        }
+    }
 }
 
 // TODO clean up

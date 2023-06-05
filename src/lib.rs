@@ -4,14 +4,16 @@ mod config;
 mod format;
 mod resolver;
 mod session;
+mod verify;
+mod sign;
 
 pub use crate::{
     config::{
         model::{
-            LogConfig, LogDestination, LogLevel, ParseLogDestinationError, ParseLogLevelError,
+            LogDestination, LogLevel, ParseLogDestinationError, ParseLogLevelError,
             ParseSocketError, Socket,
         },
-        CliOptions, RuntimeConfig,
+        CliOptions, LogConfig, RuntimeConfig,
     },
     resolver::LookupFuture,
 };
@@ -80,6 +82,7 @@ impl Config {
                 return Err(Box::new(e));
             }
         };
+        // dbg!(&config);
 
         let mock_resolver = mock_resolver.map(|r| MockLookupTxt { mock_resolver: r });
 

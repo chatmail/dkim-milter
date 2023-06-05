@@ -1,37 +1,31 @@
 use crate::{
-    auth_results,
     config::{
-        model::{
-            Expiration, OperationMode, OversignedHeaders, SignedHeaders, SigningConfig,
-            SigningConfigOverrides, SigningOverrides, SigningSenders,
-        },
+        model::{OperationMode, PartialSigningConfig, SigningSenders},
         Config, RuntimeConfig,
     },
     format::{self, EmailAddr},
-    resolver::Resolver,
+    sign::Signer,
+    verify::Verifier,
 };
 use bstr::ByteSlice;
 use indymilter::{ContextActions, Status};
-use log::{debug, error, info, warn};
-use std::{borrow::Cow, cmp, collections::HashSet, error::Error, mem, net::IpAddr, sync::Arc};
+use log::{debug, info};
+use std::{borrow::Cow, error::Error, mem, net::IpAddr, sync::Arc};
 use viadkim::{
     header::{self, FieldBody, FieldName, HeaderFields},
-    message_hash::BodyHasherStance,
-    signature::{DomainName, Selector, SignatureAlgorithm},
-    signer::{BodyLength, HeaderSelection, OversignStrategy, SignRequest, SigningStatus},
-    verifier::{self, VerificationResult, VerificationStatus, VerifierError},
-    Signer, SigningKey, Verifier,
+    signature::{DomainName, Selector},
+    SigningKey,
 };
 
 #[derive(Default)]
-pub enum Mode {
+enum Mode {
     #[default]
     Inactive,
-    Signing(Signer<Arc<SigningKey>>),
-    Verifying(Option<Verifier>),
+    Signing(Signer),
+    Verifying(Verifier),
 }
 
-enum FromAddrError {
+pub enum FromAddrError {
     Syntax,
     Multiple,
 }
@@ -127,7 +121,9 @@ impl Session {
         const MAX_HEADER_LEN: usize = 512_000;
 
         // name + ':' + value + CRLF
-        message.header_bytes = message.header_bytes.saturating_add(name.len() + value.len() + 3);
+        message.header_bytes = message
+            .header_bytes
+            .saturating_add(name.len() + value.len() + 3);
         if message.header_bytes > MAX_HEADER_LEN {
             debug!("{id}: too much header data");
             return Err("too much header data".into());
@@ -144,7 +140,7 @@ impl Session {
                         message.sender_address = Some(Ok(addr));
                     }
                     Err(e) => {
-                        debug!("{id}: unusable Sender header field: {e:?}");
+                        debug!("{id}: unusable Sender header field: {e}");
                         message.sender_address = Some(Err(FromAddrError::Syntax));
                     }
                 }
@@ -162,7 +158,7 @@ impl Session {
                         message.from_addresses = Some(Ok(addr));
                     }
                     Err(e) => {
-                        debug!("{id}: unusable From header field: {e:?}");
+                        debug!("{id}: unusable From header field: {e}");
                         message.from_addresses = Some(Err(FromAddrError::Syntax));
                     }
                 }
@@ -186,9 +182,9 @@ impl Session {
         let headers = mem::take(&mut message.headers);
         let headers = match HeaderFields::new(headers) {
             Ok(h) => h,
-            Err(e) => {
+            Err(_) => {
                 // For now, give up if inputs don't look like an email header at all
-                debug!("{id}: unusable header fields: {e:?}");
+                debug!("{id}: accepted message with unusable header fields");
                 return Ok(Status::Accept);
             }
         };
@@ -198,138 +194,66 @@ impl Session {
             info!("{id}: proceeding with header not conforming to RFC 5322: {e}");
         }
 
-        match self.runtime.config.mode {
-            OperationMode::Auto | OperationMode::Sign => {
-                // local and authenticated senders are authorised
-                let authzd = self.conn.ip.filter(|i| i.is_loopback()).is_some() || message.auth;
+        // A trusted sender is eligible for signing, and is not eligible for
+        // verifying.
+        let authorized = is_trusted_sender(id, &self.runtime.config, self.conn.ip, message.auth);
 
-                let sender = match &message.sender_address {
-                    Some(Ok(sender_addr)) => Some(sender_addr),
-                    Some(Err(_)) => None,
-                    None => {
-                        // fall back to From
-                        match &message.from_addresses {
-                            Some(Ok(from_addresses)) => {
-                                if from_addresses.len() > 1 {
-                                    None
-                                } else {
-                                    Some(from_addresses.first().unwrap())
-                                }
-                            }
-                            Some(Err(_)) | None => None,
-                        }
-                    }
-                };
+        let mode = match self.runtime.config.mode {
+            mode @ (OperationMode::Sign | OperationMode::Auto) => {
+                if authorized {
+                    let sender = extract_sender(
+                        id,
+                        message.sender_address.as_ref(),
+                        message.from_addresses.as_ref(),
+                    );
 
-                // TODO find matches in SigningSenders
-                let matches = match sender {
-                    Some(sender) => {
-                        debug!("{id}: using sender address: {sender}");
-                        find_matching_senders(&self.runtime.config.signing_senders, sender)
-                    }
-                    None => vec![],
-                };
+                    let matches = match sender {
+                        Some(sender) => find_matching_senders(&self.runtime.config.signing_senders, sender),
+                        None => vec![],
+                    };
 
-                // signing mode if authorised and right domain to sign in From
-                let mode = if authzd && !matches.is_empty() {
-                    debug!("{id}: signing mode");
-                    let signer = self.prepare_signer(headers, matches)?;
-                    Mode::Signing(signer)
-                } else {
-                    if self.runtime.config.mode == OperationMode::Auto {
-                        debug!("{id}: verifying mode");
-                        let verifier = self.prepare_verifier(headers).await;
-                        Mode::Verifying(verifier)
+                    // signing mode if authorised and right domain to sign in From
+                    if matches.is_empty() {
+                        debug!("{id}: accepted message from sender not configured for signing");
+                        return Ok(Status::Accept);
                     } else {
-                        Mode::Inactive
-                    }
-                };
+                        debug!("{id}: entered signing mode");
 
-                let message = self.message.as_mut().unwrap();
-                message.mode = mode;
+                        let recipients = &self.message.as_ref().unwrap().recipients;
+
+                        let signer = Signer::init(&self.runtime, recipients, headers, matches)?;
+
+                        Mode::Signing(signer)
+                    }
+                } else if mode == OperationMode::Auto {
+                    debug!("{id}: entered verifying mode");
+
+                    let verifier = Verifier::init(&self.runtime, headers).await;
+
+                    Mode::Verifying(verifier)
+                } else {
+                    debug!("{id}: accepted message from untrusted sender");
+                    return Ok(Status::Accept);
+                }
             }
             OperationMode::Verify => {
-                debug!("{id}: verifying mode");
-                let verifier = self.prepare_verifier(headers).await;
-                let mode = Mode::Verifying(verifier);
+                if authorized {
+                    debug!("{id}: accepted message from trusted sender");
+                    return Ok(Status::Accept);
+                } else {
+                    debug!("{id}: entered verifying mode");
 
-                let message = self.message.as_mut().unwrap();
-                message.mode = mode;
-            }
-        }
+                    let verifier = Verifier::init(&self.runtime, headers).await;
 
-        Ok(Status::Continue)
-    }
-
-    fn prepare_signer(
-        &mut self,
-        headers: HeaderFields,
-        matches: Vec<SenderMatch>,
-    ) -> Result<Signer<Arc<SigningKey>>, Box<dyn Error>> {
-        assert!(!matches.is_empty());
-
-        // TODO
-        // at this point there is one or more signature to be generated;
-        // first check if there are config overrides for the recipients!
-
-        let recipient_overrides = self.runtime.config.recipient_overrides.as_ref()
-            .and_then(|overrides| find_matching_recipient_overrides(
-                overrides,
-                &self.message.as_ref().unwrap().recipients,
-            ));
-
-        // step through matches and create SignRequest for each match
-
-        let mut requests = vec![];
-        for match_ in matches {
-            let domain = match_.domain;
-            let selector = match_.selector;
-            let signing_key = match_.key;
-
-            let config = match (&match_.signing_config, &recipient_overrides) {
-                (Some(c1), Some(c2)) => {
-                    self.runtime.config.signing_config.combine_with(c1).combine_with(c2)
-                }
-                (Some(c), None) | (None, Some(c)) => {
-                    self.runtime.config.signing_config.combine_with(c)
-                }
-                (None, None) => {
-                    self.runtime.config.signing_config.clone()
-                }
-            };
-
-            match make_sign_request(&config, domain, selector, signing_key) {
-                Ok(request) => {
-                    requests.push(request);
-                }
-                Err(e) => {
-                    warn!("failed to create sign request, ignoring request: {e}");
+                    Mode::Verifying(verifier)
                 }
             }
-        }
-
-        let signer = Signer::prepare_signing(requests, headers)
-            .map_err(|_| "could not prepare signing")?;
-
-        Ok(signer)
-    }
-
-    async fn prepare_verifier(&mut self, headers: HeaderFields) -> Option<Verifier> {
-        let fail_if_expired = self.runtime.config.fail_if_expired;
-
-        let config = verifier::Config {
-            fail_if_expired,
-            ..Default::default()
         };
 
-        match &self.runtime.resolver {
-            Resolver::Live(r) => {
-                Verifier::process_header(r, &headers, &config).await
-            }
-            Resolver::Mock(r) => {
-                Verifier::process_header(r.as_ref(), &headers, &config).await
-            }
-        }
+        let message = self.message.as_mut().unwrap();
+        message.mode = mode;
+
+        Ok(Status::Continue)
     }
 
     pub fn process_body_chunk(&mut self, chunk: &[u8]) -> Result<Status, Box<dyn Error>> {
@@ -338,21 +262,11 @@ impl Session {
             None => return Err("message context not available".into()),
         };
 
-        let status = match &mut message.mode {
-            Mode::Inactive | Mode::Verifying(None) => return Ok(Status::Skip),
-            Mode::Signing(signer) => {
-                signer.body_chunk(chunk)
-            }
-            Mode::Verifying(Some(verifier)) => {
-                verifier.body_chunk(chunk)
-            }
-        };
-
-        Ok(if let BodyHasherStance::Done = status {
-            Status::Skip
-        } else {
-            Status::Continue
-        })
+        match &mut message.mode {
+            Mode::Inactive => Ok(Status::Skip),  // not reached
+            Mode::Signing(signer) => signer.process_body_chunk(chunk),
+            Mode::Verifying(verifier) => verifier.process_body_chunk(chunk),
+        }
     }
 
     pub async fn finish_message(
@@ -366,92 +280,110 @@ impl Session {
         };
 
         match message.mode {
-            Mode::Inactive => {}
+            Mode::Inactive => Ok(Status::Continue),  // not reached
             Mode::Signing(signer) => {
-                let sigs = signer.finish().await;
+                let status = signer.finish(id, actions).await?;
 
-                for res in sigs {
-                    let sstatus = res.status;
-                    match sstatus {
-                        SigningStatus::Error { error } => {
-                            // TODO state domain/selector
-                            let _e = error;
-                            error!("{id}: failed to sign message");
-                        }
-                        SigningStatus::Success { signature, header_name, header_value } => {
-                            info!("{id}: signed message for {}", signature.domain);
-
-                            let name = header_name;
-                            let value = header_value;
-
-                            // convert SMTP CRLF to milter line endings
-                            let value = value.replace("\r\n", "\n");
-
-                            actions
-                                .insert_header(0, name, value)
-                                .await
-                                .map_err(|_| "failed to insert header")?;
-                        }
-                    }
-                }
+                Ok(status)
             }
             Mode::Verifying(verifier) => {
-                let sigs = if let Some(verifier) = verifier {
-                    verifier.finish()
-                } else {
-                    vec![]
-                };
-
-                for sig in &sigs {
-                    // TODO
-
-                    let reason;
-                    let reason = if let Some(r) = auth_results::auth_results_reason_from_status(&sig.status) {
-                        reason = format!(" ({r})");
-                        &reason
-                    } else {
-                        ""
-                    };
-
-                    info!(
-                        "{id}: verified signature from {}: {}{}",
-                        get_domain_from_verification_result(sig),
-                        sig.status.to_auth_results_kind(),
-                        reason
-                    );
-                }
-
                 let authserv_id = authserv_id(&self.runtime.config, self.conn.hostname());
-                let ar = auth_results::assemble_auth_results(authserv_id, sigs);
 
-                actions
-                    .insert_header(0, "Authentication-Results", ar)
-                    .await
-                    .map_err(|_| "failed to insert header")?;
+                let status = verifier.finish(id, authserv_id, actions).await?;
+
+                Ok(status)
             }
         }
-
-        Ok(Status::Continue)
     }
 }
 
-fn authserv_id<'a>(config: &'a Config, hostname: &'a str) -> &'a str {
+fn is_trusted_sender(id: &str, config: &Config, ip: Option<IpAddr>, authenticated: bool) -> bool {
+    match ip {
+        Some(addr) => {
+            if config.trusted_networks.contains(addr) {
+                if addr.is_loopback() {
+                    debug!("{id}: message from trusted source: local connection");
+                } else {
+                    debug!("{id}: message from trusted source: connection from trusted network address {addr}");
+                }
+                return true;
+            }
+        }
+        None => {
+            // Like OpenDKIM, treat no IP as local connection.
+            if config.trusted_networks.contains_loopback() {
+                debug!("{id}: message from trusted source: no IP address, presumed local connection");
+                return true;
+            }
+        }
+    }
+
+    if config.trust_authenticated_senders && authenticated {
+        debug!("{id}: message from trusted source: authenticated sender");
+        return true;
+    }
+
+    false
+}
+
+// See RFC 5322, section 3.6.2 for details on the relationship of the Sender and
+// From header.
+fn extract_sender<'a>(
+    id: &str,
+    sender_address: Option<&'a Result<EmailAddr, FromAddrError>>,
+    from_addresses: Option<&'a Result<Vec<EmailAddr>, FromAddrError>>,
+) -> Option<&'a EmailAddr> {
+    match sender_address {
+        Some(Ok(addr)) => {
+            debug!("{id}: using originator in Sender header: {addr}");
+            return Some(addr);
+        }
+        Some(Err(_)) => {
+            // TODO perhaps a broken or repeated Sender header should not fall back to From
+            debug!("{id}: originator address in Sender header not usable, falling back to From");
+        }
+        None => {}
+    }
+
+    match from_addresses {
+        Some(Ok(from_addresses)) => {
+            if from_addresses.len() > 1 {
+                debug!("{id}: originator address in From header not usable");
+                None
+            } else {
+                let addr = from_addresses.first().unwrap();
+                debug!("{id}: using originator in From header: {addr}");
+                Some(addr)
+            }
+        }
+        Some(Err(_)) => {
+            debug!("{id}: originator address in From header not usable");
+            None
+        }
+        None => {
+            debug!("{id}: no originator address in From or Sender header");
+            None
+        }
+    }
+}
+
+pub fn authserv_id<'a>(config: &'a Config, hostname: &'a str) -> &'a str {
     config.authserv_id.as_deref().unwrap_or(hostname)
 }
 
 #[derive(Clone, Debug)]
-struct SenderMatch {
-    domain: DomainName,
-    selector: Selector,
-    key: Arc<SigningKey>,
-    signing_config: Option<SigningConfigOverrides>,
+pub struct SenderMatch {
+    pub domain: DomainName,
+    pub selector: Selector,
+    pub key: Arc<SigningKey>,
+    pub signing_config: Option<PartialSigningConfig>,
 }
 
 fn find_matching_senders(
     signing_senders: &SigningSenders,
-    from_address: &EmailAddr,
+    sender: &EmailAddr,
 ) -> Vec<SenderMatch> {
-    let EmailAddr { local_part, domain } = from_address;
+    let EmailAddr { local_part, domain } = sender;
 
     // TODO
 
@@ -472,120 +404,6 @@ fn find_matching_senders(
     }
 
     matches
-}
-
-fn find_matching_recipient_overrides(
-    recipient_overrides: &SigningOverrides,
-    recipients: &[String],
-    // from_address: &EmailAddr,
-) -> Option<SigningConfigOverrides> {
-    for recipient in recipients {
-        // TODO ensure is parsable as email addr
-        for overrides in &recipient_overrides.entries {
-            if overrides.expr.is_match(recipient) {
-                return Some(overrides.config.clone());
-            }
-        }
-    }
-
-    None
-}
-
-fn make_sign_request(
-    config: &SigningConfig,
-    domain: DomainName,
-    selector: Selector,
-    signing_key: Arc<SigningKey>,
-) -> Result<SignRequest<Arc<SigningKey>>, Box<dyn Error>> {
-    let key_type = signing_key.key_type();
-
-    let hash_algorithm = config.hash_algorithm;
-    let signature_alg = SignatureAlgorithm::from_parts(key_type, hash_algorithm)
-        .ok_or_else(|| "invalid key type/hash algorithm pair")?;
-
-    let mut request = SignRequest::new(domain, selector, signature_alg, signing_key);
-
-    request.canonicalization = config.canonicalization;
-
-    request.valid_duration = match config.expire_after {
-        Expiration::Never => None,
-        Expiration::After(duration) => Some(duration),
-    };
-
-    request.copy_headers = config.copy_headers;
-    if config.limit_body_length {
-        request.body_length = BodyLength::OnlyMessageLength;
-    }
-
-    let oversigned_headers = match &config.oversigned_headers {
-        OversignedHeaders::Pick(names) => names.into_iter().map(|n| n.as_ref().clone()).collect(),
-    };
-
-    match &config.signed_headers {
-        SignedHeaders::Pick(names) => {
-            let signed_headers: HashSet<_> = names.into_iter().map(|n| n.as_ref().clone()).collect();
-            request.header_selection = HeaderSelection::Pick {
-                include: signed_headers,
-                oversign: OversignStrategy::Selected(oversigned_headers),
-            };
-        }
-        SignedHeaders::PickWithDefault(names) => {
-            let mut signed_headers: HashSet<_> =
-                config.default_signed_headers.iter().map(|n| n.as_ref().clone()).collect();
-            for name in names {
-                signed_headers.insert(name.as_ref().clone());
-            }
-            request.header_selection = HeaderSelection::Pick {
-                include: signed_headers,
-                oversign: OversignStrategy::Selected(oversigned_headers),
-            };
-        }
-        SignedHeaders::All => {
-            let unsigned_headers: HashSet<_> =
-                config.default_unsigned_headers.iter().map(|n| n.as_ref().clone()).collect();
-            request.header_selection = HeaderSelection::All {
-                exclude: unsigned_headers,
-                oversign: OversignStrategy::Selected(oversigned_headers),
-            };
-        }
-    }
-
-    Ok(request)
-}
-
-pub fn get_domain_from_verification_result(res: &VerificationResult) -> String {
-    match &res.signature {
-        Some(s) => s.domain.to_string(),
-        None => {
-            if let VerificationStatus::Failure(VerifierError::DkimSignatureHeaderFormat(e)) = &res.status {
-                if let Some(d) = &e.domain {
-                    return d.to_string();
-                }
-            }
-            "unknown".to_string()
-        }
-    }
-}
-
-pub fn get_signature_prefix_from_verification_result(res: &VerificationResult) -> Option<String> {
-    match &res.signature {
-        Some(sig) => {
-            let s = viadkim::encode_binary(&sig.signature_data);
-            let s = &s[..(cmp::min(8, s.len()))];
-            Some(s.into())
-        }
-        None => {
-            if let VerificationStatus::Failure(VerifierError::DkimSignatureHeaderFormat(e)) =
-                &res.status
-            {
-                if let Some(s) = &e.signature_data_base64 {
-                    let s = &s[..(cmp::min(8, s.len()))];
-                    return Some(s.into());
-                }
-            }
-            None
-        }
-    }
 }
 
 // TODO

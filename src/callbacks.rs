@@ -4,12 +4,12 @@ use indymilter::{
     Actions, Callbacks, Context, EomContext, MacroStage, Macros, NegotiateContext, ProtoOpts,
     SocketInfo, Status,
 };
+use log::error;
 use std::{
     borrow::Cow,
     ffi::{CStr, CString},
     sync::{Arc, RwLock},
 };
-use log::{debug, error};
 
 macro_rules! get_session {
     ($context:expr) => {
@@ -73,8 +73,6 @@ async fn handle_negotiate(
 }
 
 async fn handle_connect(context: &mut Context<Session>, socket_info: SocketInfo) -> Status {
-    debug!("connecting from {socket_info:?}");
-
     let session = get_session!(context);
 
     let ip = match socket_info {
@@ -157,8 +155,6 @@ async fn handle_body(context: &mut Context<Session>, chunk: impl AsRef<[u8]>) ->
 }
 
 async fn handle_eom(context: &mut EomContext<Session>) -> Status {
-    debug!("finishing message");
-
     let session = get_session!(context);
     let id = context.macros.queue_id();
 
