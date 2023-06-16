@@ -15,7 +15,7 @@ use viadkim::{
     header::{FieldName, HeaderFields},
     message_hash::BodyHasherStance,
     signature::{DomainName, Selector, SignatureAlgorithm},
-    signer::{self, BodyLength, HeaderSelection, SignRequest, SigningStatus},
+    signer::{self, BodyLength, HeaderSelection, SignRequest, SignResult},
     SigningKey,
 };
 
@@ -101,18 +101,16 @@ impl Signer {
         let sigs = self.delegate.finish().await;
 
         for res in sigs {
-            let sstatus = res.status;
-            match sstatus {
-                SigningStatus::Error { error } => {
+            match res {
+                Err(_e) => {
                     // TODO state domain/selector
-                    let _e = error;
                     error!("{id}: failed to sign message");
                 }
-                SigningStatus::Success {
+                Ok(SignResult {
                     signature,
                     header_name,
                     header_value,
-                } => {
+                }) => {
                     info!("{id}: signed message for {}", signature.domain);
 
                     let name = header_name;
@@ -181,6 +179,10 @@ fn make_sign_request(
         &config.default_signed_headers,
         &config.default_unsigned_headers,
     ));
+
+    if config.request_reports {
+        request.extra_tags.push(("r".into(), "y".into()));
+    }
 
     Ok(request)
 }

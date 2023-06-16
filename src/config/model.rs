@@ -227,6 +227,7 @@ pub struct SigningConfig {
     pub expire_after: Expiration,
     pub copy_headers: bool,
     pub limit_body_length: bool,
+    pub request_reports: bool,
 }
 
 impl SigningConfig {
@@ -294,6 +295,9 @@ impl SigningConfig {
         if let Some(limit_body_length) = overrides.limit_body_length {
             config.limit_body_length = limit_body_length;
         }
+        if let Some(request_reports) = overrides.request_reports {
+            config.request_reports = request_reports;
+        }
 
         config.check_invariants()?;
 
@@ -320,6 +324,7 @@ impl Default for SigningConfig {
             expire_after: Expiration::After(Duration::from_secs(60 * 60 * 24 * 5)),  // five days
             copy_headers: false,
             limit_body_length: false,
+            request_reports: false,
         }
     }
 }
@@ -335,6 +340,7 @@ pub struct PartialSigningConfig {
     pub expire_after: Option<Expiration>,
     pub copy_headers: Option<bool>,
     pub limit_body_length: Option<bool>,
+    pub request_reports: Option<bool>,
 }
 
 impl PartialSigningConfig {
@@ -357,6 +363,7 @@ impl PartialSigningConfig {
             expire_after: overrides.expire_after.or(self.expire_after),
             copy_headers: overrides.copy_headers.or(self.copy_headers),
             limit_body_length: overrides.limit_body_length.or(self.limit_body_length),
+            request_reports: overrides.request_reports.or(self.request_reports),
         }
     }
 
@@ -388,6 +395,9 @@ impl PartialSigningConfig {
         }
         if let Some(limit_body_length) = self.limit_body_length {
             config.limit_body_length = limit_body_length;
+        }
+        if let Some(request_reports) = self.request_reports {
+            config.request_reports = request_reports;
         }
 
         config.check_invariants()?;

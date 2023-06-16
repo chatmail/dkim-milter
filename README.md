@@ -2,7 +2,7 @@
 
 ### 🚧
 
-### *experimental, in development*
+### *in development*
 
 ### 🏗
 

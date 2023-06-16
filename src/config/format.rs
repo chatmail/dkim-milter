@@ -617,6 +617,10 @@ fn parse_signing_config_param(
             let value = params::parse_boolean(v)?;
             config.limit_body_length = Some(value);
         }
+        "request_reports" => {
+            let value = params::parse_boolean(v)?;
+            config.request_reports = Some(value);
+        }
         _ => return Ok(false),
     }
     Ok(true)
@@ -624,11 +628,10 @@ fn parse_signing_config_param(
 
 pub fn lines(s: &str) -> impl Iterator<Item = (usize, &str)> {
     s.lines().enumerate().filter_map(|(i, line)| {
-        let line = line.trim();
         if is_ignored_line(line) {
             None
         } else {
-            Some((i + 1, line))
+            Some((i + 1, line.trim()))
         }
     })
 }
