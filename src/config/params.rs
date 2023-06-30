@@ -19,6 +19,13 @@ pub fn parse_boolean(s: &str) -> Result<bool, ParseParamError> {
     }
 }
 
+// parse u32 value and turn it into usize (preferred *internal* format) right away
+pub fn parse_u32_as_usize(s: &str) -> Result<usize, ParseParamError> {
+    let n = u32::from_str(s).map_err(|_| ParseParamError::InvalidU32(s.into()))?;
+    let n = n.try_into().map_err(|_| ParseParamError::InvalidU32(s.into()))?;
+    Ok(n)
+}
+
 pub fn parse_trusted_networks(s: &str) -> Result<TrustedNetworks, ParseParamError> {
     let mut trusted_networks = TrustedNetworks {
         trust_loopback: false,
@@ -132,7 +139,7 @@ fn parse_field_names(s: &str) -> Result<Vec<SignedFieldName>, ParseParamError> {
 pub fn parse_hash_algorithm(s: &str) -> Result<HashAlgorithm, ParseParamError> {
     let value = match s {
         "sha256" => HashAlgorithm::Sha256,
-        #[cfg(feature = "sha1")]
+        #[cfg(feature = "pre-rfc8301")]
         "sha1" => HashAlgorithm::Sha1,
         _ => {
             return Err(ParseParamError::InvalidHashAlgorithm(s.into()));

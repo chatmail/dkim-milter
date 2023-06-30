@@ -1,6 +1,6 @@
 use crate::verify;
 use std::fmt::Write;
-use viadkim::verifier::{AuthResultsKind, VerificationResult, VerificationStatus};
+use viadkim::verifier::{DkimAuthResult, VerificationResult, VerificationStatus};
 
 pub fn auth_results_reason_from_status(status: &VerificationStatus) -> Option<String> {
     match status {
@@ -16,17 +16,17 @@ pub fn assemble_auth_results(authserv_id: &str, sigs: Vec<VerificationResult>) -
     write!(result, " {authserv_id}").unwrap();
 
     if sigs.is_empty() {
-        let ar = AuthResultsKind::None;
+        let ar = DkimAuthResult::None;
         write!(result, "; dkim={ar}").unwrap();
     } else {
         for sig in sigs {
             result.push_str(";\n\t");
 
-            let ar = sig.status.to_auth_results_kind();
+            let ar = sig.status.to_dkim_auth_result();
 
             write!(result, "dkim={ar}").unwrap();
 
-            if sig.testing {
+            if sig.key_record.as_ref().map_or(false, |r| r.is_testing_mode()) {
                 write!(result, " (testing mode)").unwrap();
             }
 

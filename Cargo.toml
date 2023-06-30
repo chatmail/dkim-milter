@@ -32,4 +32,4 @@ viadkim = { path = "../viadkim" }
 indymilter-test = "0.0.3"
 
 [features]
-sha1 = ["viadkim/sha1"]
+pre-rfc8301 = ["viadkim/pre-rfc8301"]

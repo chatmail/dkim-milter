@@ -166,8 +166,13 @@ impl Session {
         }
 
         // update header fields, ignore unusable inputs
-        if let (Ok(name), Ok(value)) = (FieldName::new(name), FieldBody::new(value)) {
-            message.headers.push((name, value));
+        match (FieldName::new(name), FieldBody::new(value)) {
+            (Ok(name), Ok(value)) => {
+                message.headers.push((name, value));
+            }
+            _ => {
+                debug!("{id}: ignoring ill-formed header field");
+            }
         }
 
         Ok(Status::Continue)
@@ -192,6 +197,7 @@ impl Session {
         if let Err(e) = header::validate_rfc5322(&headers) {
             // For now, simply log that we are proceeding with an ill-formed header.
             info!("{id}: proceeding with header not conforming to RFC 5322: {e}");
+            // TODO perhaps also check "Sender MUST occur with multi-address From" here?
         }
 
         // A trusted sender is eligible for signing, and is not eligible for

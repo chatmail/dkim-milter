@@ -134,6 +134,8 @@ impl LogConfig {
 pub struct Config {
     pub authserv_id: Option<String>,
     pub fail_if_expired: bool,
+    pub min_key_bits: usize,
+    pub allow_sha1: bool,
     pub mode: OperationMode,
     pub recipient_overrides: Option<SigningOverrides>,
     pub signing_senders: SigningSenders,
@@ -157,6 +159,8 @@ impl fmt::Debug for Config {
         f.debug_struct("Config")
             .field("authserv_id", &self.authserv_id)
             .field("fail_if_expired", &self.fail_if_expired)
+            .field("min_key_bits", &self.min_key_bits)
+            .field("allow_sha1", &self.allow_sha1)
             .field("mode", &self.mode)
             .field("recipient_overrides", &self.recipient_overrides)
             .field("signing_senders", &"<omitted>")

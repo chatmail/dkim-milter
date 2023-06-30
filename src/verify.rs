@@ -15,16 +15,20 @@ pub struct Verifier {
 impl Verifier {
     pub async fn init(runtime: &RuntimeConfig, headers: HeaderFields) -> Self {
         let fail_if_expired = runtime.config.fail_if_expired;
+        let min_key_bits = runtime.config.min_key_bits;
+        let allow_sha1 = runtime.config.allow_sha1;
 
         let config = verifier::Config {
             fail_if_expired,
+            min_key_bits,
+            allow_sha1,
             ..Default::default()
         };
 
         let verifier = match &runtime.resolver {
-            Resolver::Live(r) => viadkim::Verifier::process_header(r, &headers, &config).await,
+            Resolver::Live(r) => viadkim::Verifier::verify_header(r, &headers, &config).await,
             Resolver::Mock(r) => {
-                viadkim::Verifier::process_header(r.as_ref(), &headers, &config).await
+                viadkim::Verifier::verify_header(r.as_ref(), &headers, &config).await
             }
         };
 
@@ -33,7 +37,7 @@ impl Verifier {
 
     pub fn process_body_chunk(&mut self, chunk: &[u8]) -> Result<Status, Box<dyn Error>> {
         let status = match &mut self.delegate {
-            Some(verifier) => verifier.body_chunk(chunk),
+            Some(verifier) => verifier.process_body_chunk(chunk),
             None => return Ok(Status::Skip),
         };
 
@@ -62,7 +66,10 @@ impl Verifier {
             let testing = "testing mode";
 
             let comment;
-            let comment = match (auth_results::auth_results_reason_from_status(&sig.status), sig.testing) {
+            let comment = match (
+                auth_results::auth_results_reason_from_status(&sig.status),
+                sig.key_record.as_ref().map_or(false, |r| r.is_testing_mode()),
+            ) {
                 (None, false) => "",
                 (None, true) => {
                     comment = format!(" ({testing})");
@@ -81,7 +88,7 @@ impl Verifier {
             info!(
                 "{id}: verified signature from {}: {}{}",
                 get_domain_from_verification_result(sig),
-                sig.status.to_auth_results_kind(),
+                sig.status.to_dkim_auth_result(),
                 comment
             );
         }
@@ -116,7 +123,7 @@ pub fn get_signature_prefix_from_verification_result(res: &VerificationResult) -
     // TODO use minimal unique prefix instead of [..8]
     match &res.signature {
         Some(sig) => {
-            let s = viadkim::encode_binary(&sig.signature_data);
+            let s = viadkim::encode_base64(&sig.signature_data);
             let s = &s[..(cmp::min(8, s.len()))];
             Some(s.into())
         }
@@ -124,7 +131,7 @@ pub fn get_signature_prefix_from_verification_result(res: &VerificationResult) -
             if let VerificationStatus::Failure(VerifierError::DkimSignatureHeaderFormat(e)) =
                 &res.status
             {
-                if let Some(s) = &e.signature_data_base64 {
+                if let Some(s) = &e.signature_data {
                     let s = &s[..(cmp::min(8, s.len()))];
                     return Some(s.into());
                 }

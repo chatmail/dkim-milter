@@ -22,7 +22,7 @@ invalid UTF-8 bytes is not a problem, but processed transparently as a byte
 string, etc.
 
 DKIM Milter can be used as a simple alternative to the OpenDKIM milter. Credit
-goes to that project, of which I have been a long-time happy user and which has
+goes to that project, of which I have been a long-time user and which has
 inspired some choices made here.
 
 [Postfix]: https://www.postfix.org
@@ -38,9 +38,13 @@ working, but alpha quality).
 
 A source checkout of viadkim in a sibling directory is also required.
 
-During building and installation the option `--features sha1` can be specified
-to enable support for the insecure, historic SHA-1 hash algorithm. Use of this
-feature is strongly discouraged.
+During building and installation the option `--features pre-rfc8301` can be
+specified to revert cryptographic algorithm and key usage back to before [RFC
+8301]: it enables support for the insecure, historic SHA-1 algorithm, and allows
+use of RSA key sizes below 1024 bits. Use of this feature is strongly
+discouraged.
+
+[RFC 8301]: https://www.rfc-editor.org/rfc/rfc8301
 
 ## Usage
 
@@ -58,7 +62,7 @@ service as a starting point.
 The supported signature algorithms, for both signing and verifying, are
 `rsa-sha256` and `ed25519-sha256`. By default, the historic signature algorithm
 `rsa-sha1` is not supported, evaluation of such signatures yields a *permerror*
-result (RFC 8301; but see feature `sha1` above).
+result (RFC 8301; but see feature `pre-rfc8301` above).
 
 ## Configuration
 
@@ -244,4 +248,4 @@ WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A
 PARTICULAR PURPOSE. See the GNU General Public License for more details.
 
 You should have received a copy of the GNU General Public License along with
-this program. If not, see https://www.gnu.org/licenses/.
+this program. If not, see <https://www.gnu.org/licenses/>.

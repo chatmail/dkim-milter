@@ -65,6 +65,7 @@ impl Error for ParseConfigError {
             | InvalidLogLevel(_)
             | InvalidSocket(_)
             | InvalidBoolean(_)
+            | InvalidU32(_)
             | InvalidNetworkAddress(_)
             | InvalidTrustedNetworks(_)
             | InvalidSignedHeaders(_)
@@ -95,6 +96,7 @@ impl Display for ParseConfigError {
             | InvalidLogLevel(_)
             | InvalidSocket(_)
             | InvalidBoolean(_)
+            | InvalidU32(_)
             | InvalidNetworkAddress(_)
             | InvalidTrustedNetworks(_)
             | InvalidSignedHeaders(_)
@@ -123,6 +125,7 @@ pub enum ParseParamError {
 
     InvalidSocket(String),
     InvalidBoolean(String),
+    InvalidU32(String),
     InvalidNetworkAddress(String),
     InvalidTrustedNetworks(String),
     InvalidSignedHeaders(String),
@@ -155,6 +158,7 @@ impl Display for ParseParamError {
 
             Self::InvalidSocket(s) => write!(f, "invalid socket \"{s}\""),
             Self::InvalidBoolean(s) => write!(f, "invalid Boolean value \"{s}\""),
+            Self::InvalidU32(s) => write!(f, "invalid integer value \"{s}\""),
             Self::InvalidNetworkAddress(s) => write!(f, "invalid network address \"{s}\""),
             Self::InvalidTrustedNetworks(s) => write!(f, "invalid trusted networks \"{s}\""),
             Self::InvalidSignedHeaders(s) => write!(f, "invalid signed headers \"{s}\""),
@@ -183,6 +187,8 @@ pub struct PartialLogConfig {
 pub struct RawConfig {
     pub authserv_id: Option<String>,
     pub fail_if_expired: Option<bool>,
+    pub min_key_bits: Option<usize>,
+    pub allow_sha1: Option<bool>,
     pub mode: Option<OperationMode>,
     pub recipient_overrides_file: Option<(usize, String)>,
     pub signing_keys_file: Option<(usize, String)>,
@@ -462,6 +468,14 @@ async fn parse_raw_config(file_content: &str) -> Result<RawConfig, ConfigErrorKi
                 let value = params::parse_boolean(v).map_err(|e| ParseConfigError::new(num, e))?;
                 config.fail_if_expired = Some(value);
             }
+            "min_key_bits" => {
+                let value = params::parse_u32_as_usize(v).map_err(|e| ParseConfigError::new(num, e))?;
+                config.min_key_bits = Some(value);
+            }
+            "allow_sha1" => {
+                let value = params::parse_boolean(v).map_err(|e| ParseConfigError::new(num, e))?;
+                config.allow_sha1 = Some(value);
+            }
             _ => {
                 let mut inserted_param;
 
@@ -533,6 +547,8 @@ async fn build_config(
     let trusted_networks = raw_config.trusted_networks.unwrap_or_default();
 
     let fail_if_expired = raw_config.fail_if_expired.unwrap_or(true);
+    let min_key_bits = raw_config.min_key_bits.unwrap_or(1024);
+    let allow_sha1 = raw_config.allow_sha1.unwrap_or(false);
 
     let signing_config = raw_config.signing_config.into_signing_config()
         .map_err(|_| ValidationError::IncompatibleSigningConfigOverrides)?;
@@ -540,6 +556,8 @@ async fn build_config(
     let config = Config {
         authserv_id: raw_config.authserv_id,
         fail_if_expired,
+        min_key_bits,
+        allow_sha1,
         log_config,
         mode,
         recipient_overrides,

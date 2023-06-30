@@ -77,14 +77,14 @@ impl Signer {
             }
         }
 
-        let signer = viadkim::Signer::prepare_signing(requests, headers)
+        let signer = viadkim::Signer::prepare_signing(headers, requests)
             .map_err(|_| "could not prepare signing")?;
 
         Ok(Self { delegate: signer })
     }
 
     pub fn process_body_chunk(&mut self, chunk: &[u8]) -> Result<Status, Box<dyn Error>> {
-        let status = self.delegate.body_chunk(chunk);
+        let status = self.delegate.process_body_chunk(chunk);
 
         Ok(if let BodyHasherStance::Done = status {
             Status::Skip
@@ -98,7 +98,7 @@ impl Signer {
         id: &str,
         actions: &impl ContextActions,
     ) -> Result<Status, ActionError> {
-        let sigs = self.delegate.finish().await;
+        let sigs = self.delegate.sign().await;
 
         for res in sigs {
             match res {
@@ -181,7 +181,7 @@ fn make_sign_request(
     ));
 
     if config.request_reports {
-        request.extra_tags.push(("r".into(), "y".into()));
+        request.ext_tags.push(("r".into(), "y".into()));
     }
 
     Ok(request)
