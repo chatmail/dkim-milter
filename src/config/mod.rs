@@ -38,6 +38,7 @@ pub fn get_default_config_file(opts: &CliOptions) -> &Path {
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct CliOptions {
     pub config_file: Option<PathBuf>,
+    pub dry_run: bool,
     pub log_destination: Option<LogDestination>,
     pub log_level: Option<LogLevel>,
     pub socket: Option<Socket>,
@@ -133,7 +134,7 @@ impl LogConfig {
 
 pub struct Config {
     pub authserv_id: Option<String>,
-    pub fail_if_expired: bool,
+    pub allow_expired: bool,
     pub min_key_bits: usize,
     pub allow_sha1: bool,
     pub mode: OperationMode,
@@ -142,6 +143,7 @@ pub struct Config {
     pub socket: Socket,
     pub trust_authenticated_senders: bool,
     pub trusted_networks: TrustedNetworks,
+    pub dry_run: bool,
 
     pub log_config: LogConfig,
     pub signing_config: SigningConfig,
@@ -158,7 +160,7 @@ impl fmt::Debug for Config {
         // TODO
         f.debug_struct("Config")
             .field("authserv_id", &self.authserv_id)
-            .field("fail_if_expired", &self.fail_if_expired)
+            .field("allow_expired", &self.allow_expired)
             .field("min_key_bits", &self.min_key_bits)
             .field("allow_sha1", &self.allow_sha1)
             .field("mode", &self.mode)
@@ -169,6 +171,7 @@ impl fmt::Debug for Config {
             .field("trusted_networks", &self.trusted_networks)
             .field("log_config", &self.log_config)
             .field("signing_config", &self.signing_config)
+            .field("dry_run", &self.dry_run)
             .finish()
     }
 }

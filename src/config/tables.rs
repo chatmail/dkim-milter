@@ -8,7 +8,7 @@ use std::{
     collections::HashMap,
     error::Error,
     fmt::{self, Display, Formatter},
-    io,
+    io::{self, ErrorKind},
     path::PathBuf,
 };
 use tokio::fs;
@@ -180,7 +180,8 @@ async fn read_signing_key(
         }
     };
 
-    let key = SigningKey::from_pkcs8_pem(&key_file_content)?;
+    let key = SigningKey::from_pkcs8_pem(&key_file_content)
+        .map_err(|e| io::Error::new(ErrorKind::InvalidData, e))?;
 
     Ok(key)
 }

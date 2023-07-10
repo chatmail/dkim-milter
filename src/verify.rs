@@ -1,11 +1,15 @@
-use crate::{auth_results, config::RuntimeConfig, resolver::Resolver};
+use crate::{
+    auth_results,
+    config::{Config, RuntimeConfig},
+    resolver::Resolver,
+};
 use indymilter::{ActionError, ContextActions, Status};
-use log::info;
+use log::{debug, info};
 use std::{cmp, error::Error};
 use viadkim::{
     header::HeaderFields,
     message_hash::BodyHasherStance,
-    verifier::{self, VerificationResult, VerificationStatus, VerifierError},
+    verifier::{self, VerificationError, VerificationResult, VerificationStatus},
 };
 
 pub struct Verifier {
@@ -14,12 +18,12 @@ pub struct Verifier {
 
 impl Verifier {
     pub async fn init(runtime: &RuntimeConfig, headers: HeaderFields) -> Self {
-        let fail_if_expired = runtime.config.fail_if_expired;
+        let allow_expired = runtime.config.allow_expired;
         let min_key_bits = runtime.config.min_key_bits;
         let allow_sha1 = runtime.config.allow_sha1;
 
         let config = verifier::Config {
-            fail_if_expired,
+            allow_expired,
             min_key_bits,
             allow_sha1,
             ..Default::default()
@@ -51,6 +55,7 @@ impl Verifier {
     pub async fn finish(
         self,
         id: &str,
+        config: &Config,
         authserv_id: &str,
         actions: &impl ContextActions,
     ) -> Result<Status, ActionError> {
@@ -95,9 +100,14 @@ impl Verifier {
 
         let ar = auth_results::assemble_auth_results(authserv_id, sigs);
 
-        actions
-            .insert_header(0, "Authentication-Results", ar)
-            .await?;
+        if config.dry_run {
+            debug!("{id}: adding Authentication-Results header [dry run, not done]");
+        } else {
+            debug!("{id}: adding Authentication-Results header");
+            actions
+                .insert_header(0, "Authentication-Results", ar)
+                .await?;
+        }
 
         Ok(Status::Continue)
     }
@@ -107,7 +117,7 @@ pub fn get_domain_from_verification_result(res: &VerificationResult) -> String {
     match &res.signature {
         Some(s) => s.domain.to_string(),
         None => {
-            if let VerificationStatus::Failure(VerifierError::DkimSignatureHeaderFormat(e)) =
+            if let VerificationStatus::Failure(VerificationError::DkimSignatureFormat(e)) =
                 &res.status
             {
                 if let Some(d) = &e.domain {
@@ -128,7 +138,7 @@ pub fn get_signature_prefix_from_verification_result(res: &VerificationResult) -
             Some(s.into())
         }
         None => {
-            if let VerificationStatus::Failure(VerifierError::DkimSignatureHeaderFormat(e)) =
+            if let VerificationStatus::Failure(VerificationError::DkimSignatureFormat(e)) =
                 &res.status
             {
                 if let Some(s) = &e.signature_data {

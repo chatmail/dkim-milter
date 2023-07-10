@@ -38,7 +38,9 @@ impl MacrosExt for Macros {
 
 pub fn make_callbacks(runtime: Arc<RwLock<Arc<RuntimeConfig>>>) -> Callbacks<Session> {
     Callbacks::new()
-        .on_negotiate(move |cx, _, _| Box::pin(handle_negotiate(runtime.clone(), cx)))
+        .on_negotiate(move |cx, actions, opts| {
+            Box::pin(handle_negotiate(runtime.clone(), cx, actions, opts))
+        })
         .on_connect(|cx, _, socket_info| Box::pin(handle_connect(cx, socket_info)))
         .on_mail(|cx, smtp_args| Box::pin(handle_mail(cx, smtp_args)))
         .on_rcpt(|cx, smtp_args| Box::pin(handle_rcpt(cx, smtp_args)))
@@ -53,13 +55,31 @@ pub fn make_callbacks(runtime: Arc<RwLock<Arc<RuntimeConfig>>>) -> Callbacks<Ses
 async fn handle_negotiate(
     runtime: Arc<RwLock<Arc<RuntimeConfig>>>,
     context: &mut NegotiateContext<Session>,
+    supported_actions: Actions,
+    supported_opts: ProtoOpts,
 ) -> Status {
     let runtime = runtime
         .read()
         .expect("could not get configuration read lock")
         .clone();
 
-    context.requested_actions |= Actions::ADD_HEADER;
+    // Log unsupported actions and protocol options at error level, the milter
+    // library will abort the connection when this callback returns.
+
+    if !runtime.config.dry_run {
+        if !supported_actions.contains(Actions::ADD_HEADER) {
+            error!("MTA does not support adding headers, aborting");
+        }
+        context.requested_actions |= Actions::ADD_HEADER;
+    }
+
+    if !supported_opts.contains(ProtoOpts::SKIP) {
+        error!("MTA does not support skipping repeated callback calls, aborting");
+    }
+    if !supported_opts.contains(ProtoOpts::LEADING_SPACE) {
+        error!("MTA does not support accurate whitespace handling in headers, aborting");
+    }
+
     context.requested_opts |= ProtoOpts::SKIP | ProtoOpts::LEADING_SPACE;
 
     let macros = &mut context.requested_macros;

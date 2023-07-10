@@ -12,9 +12,9 @@ use indymilter::{ContextActions, Status};
 use log::{debug, info};
 use std::{borrow::Cow, error::Error, mem, net::IpAddr, sync::Arc};
 use viadkim::{
+    crypto::SigningKey,
     header::{self, FieldBody, FieldName, HeaderFields},
     signature::{DomainName, Selector},
-    SigningKey,
 };
 
 #[derive(Default)]
@@ -288,14 +288,14 @@ impl Session {
         match message.mode {
             Mode::Inactive => Ok(Status::Continue),  // not reached
             Mode::Signing(signer) => {
-                let status = signer.finish(id, actions).await?;
+                let status = signer.finish(id, &self.runtime.config, actions).await?;
 
                 Ok(status)
             }
             Mode::Verifying(verifier) => {
                 let authserv_id = authserv_id(&self.runtime.config, self.conn.hostname());
 
-                let status = verifier.finish(id, authserv_id, actions).await?;
+                let status = verifier.finish(id, &self.runtime.config, authserv_id, actions).await?;
 
                 Ok(status)
             }

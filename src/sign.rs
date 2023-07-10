@@ -4,7 +4,7 @@ use crate::{
             Expiration, OversignedHeaders, PartialSigningConfig, SignedFieldName, SignedHeaders,
             SigningConfig, SigningOverrides,
         },
-        RuntimeConfig,
+        Config, RuntimeConfig,
     },
     session::SenderMatch,
 };
@@ -12,11 +12,11 @@ use indymilter::{ActionError, ContextActions, Status};
 use log::{error, info};
 use std::{collections::HashSet, error::Error, sync::Arc};
 use viadkim::{
+    crypto::SigningKey,
     header::{FieldName, HeaderFields},
     message_hash::BodyHasherStance,
-    signature::{DomainName, Selector, SignatureAlgorithm},
-    signer::{self, BodyLength, HeaderSelection, SignRequest, SignResult},
-    SigningKey,
+    signature::{DomainName, Selector, SigningAlgorithm},
+    signer::{self, BodyLength, HeaderSelection, SignRequest, SigningResult},
 };
 
 pub struct Signer {
@@ -96,6 +96,7 @@ impl Signer {
     pub async fn finish(
         self,
         id: &str,
+        config: &Config,
         actions: &impl ContextActions,
     ) -> Result<Status, ActionError> {
         let sigs = self.delegate.sign().await;
@@ -106,20 +107,21 @@ impl Signer {
                     // TODO state domain/selector
                     error!("{id}: failed to sign message");
                 }
-                Ok(SignResult {
+                Ok(SigningResult {
                     signature,
-                    header_name,
-                    header_value,
+                    header_name: name,
+                    header_value: value,
                 }) => {
-                    info!("{id}: signed message for {}", signature.domain);
+                    if config.dry_run {
+                        info!("{id}: signed message for {} [dry run, not done]", signature.domain);
+                    } else {
+                        info!("{id}: signed message for {}", signature.domain);
 
-                    let name = header_name;
-                    let value = header_value;
+                        // convert SMTP CRLF to milter line endings
+                        let value = value.replace("\r\n", "\n");
 
-                    // convert SMTP CRLF to milter line endings
-                    let value = value.replace("\r\n", "\n");
-
-                    actions.insert_header(0, name, value).await?;
+                        actions.insert_header(0, name, value).await?;
+                    }
                 }
             }
         }
@@ -155,7 +157,7 @@ fn make_sign_request(
     let key_type = signing_key.key_type();
 
     let hash_algorithm = config.hash_algorithm;
-    let signature_alg = SignatureAlgorithm::from_parts(key_type, hash_algorithm)
+    let signature_alg = SigningAlgorithm::from_parts(key_type, hash_algorithm)
         .ok_or("invalid key type/hash algorithm pair")?;
 
     let mut request = SignRequest::new(domain, selector, signature_alg, signing_key);
@@ -168,8 +170,9 @@ fn make_sign_request(
     };
 
     request.copy_headers = config.copy_headers;
+
     if config.limit_body_length {
-        request.body_length = BodyLength::OnlyMessageLength;
+        request.body_length = BodyLength::MessageContent;
     }
 
     request.header_selection = HeaderSelection::Manual(select_headers(

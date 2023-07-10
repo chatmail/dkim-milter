@@ -16,6 +16,8 @@ pub struct EmailAddr {
     pub domain: DomainName,
 }
 
+// TODO revisit
+/*
 impl EmailAddr {
     pub fn new(addr: &str) -> Result<EmailAddr, Box<dyn std::error::Error>> {
         let (local_part, domain) = addr.rsplit_once('@').ok_or("not an email addr")?;
@@ -27,6 +29,7 @@ impl EmailAddr {
         })
     }
 }
+*/
 
 impl Display for EmailAddr {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {

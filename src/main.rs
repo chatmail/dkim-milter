@@ -100,6 +100,7 @@ const USAGE_TEXT: &str = "\
 
 Options:
   -c, --config-file <path>          Path to configuration file
+  -n, --dry-run                     Process messages without taking action
   -h, --help                        Print usage information
   -l, --log-destination <target>    Destination for log messages
   -L, --log-level <level>           Minimum severity of messages to log
@@ -127,6 +128,9 @@ fn parse_args() -> Result<CliOptions, Box<dyn Error>> {
             "-V" | "--version" => {
                 writeln!(stdout(), "{MILTER_NAME} {VERSION}")?;
                 process::exit(0);
+            }
+            "-n" | "--dry-run" => {
+                opts.dry_run = true;
             }
             "-c" | "--config-file" => {
                 let path = args.next().ok_or_else(missing_value)??;

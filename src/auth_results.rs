@@ -1,11 +1,17 @@
 use crate::verify;
-use std::fmt::Write;
+use std::{error::Error, fmt::Write};
 use viadkim::verifier::{DkimAuthResult, VerificationResult, VerificationStatus};
 
 pub fn auth_results_reason_from_status(status: &VerificationStatus) -> Option<String> {
     match status {
         VerificationStatus::Success => None,
-        VerificationStatus::Failure(error) => Some(error.to_string()),
+        VerificationStatus::Failure(error) => {
+            // for now display only the source error
+            Some(match error.source() {
+                Some(e) => e.to_string(),
+                None => error.to_string(),
+            })
+        }
     }
 }
 

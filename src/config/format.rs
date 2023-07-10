@@ -186,7 +186,7 @@ pub struct PartialLogConfig {
 #[derive(Clone, Debug, Default)]
 pub struct RawConfig {
     pub authserv_id: Option<String>,
-    pub fail_if_expired: Option<bool>,
+    pub allow_expired: Option<bool>,
     pub min_key_bits: Option<usize>,
     pub allow_sha1: Option<bool>,
     pub mode: Option<OperationMode>,
@@ -196,6 +196,7 @@ pub struct RawConfig {
     pub socket: Option<Socket>,
     pub trust_authenticated_senders: Option<bool>,
     pub trusted_networks: Option<TrustedNetworks>,
+    pub dry_run: Option<bool>,
 
     pub log_config: PartialLogConfig,
     pub signing_config: PartialSigningConfig,
@@ -464,9 +465,9 @@ async fn parse_raw_config(file_content: &str) -> Result<RawConfig, ConfigErrorKi
                 })?;
                 config.mode = Some(value);
             }
-            "fail_if_expired" => {
+            "allow_expired" => {
                 let value = params::parse_boolean(v).map_err(|e| ParseConfigError::new(num, e))?;
-                config.fail_if_expired = Some(value);
+                config.allow_expired = Some(value);
             }
             "min_key_bits" => {
                 let value = params::parse_u32_as_usize(v).map_err(|e| ParseConfigError::new(num, e))?;
@@ -475,6 +476,10 @@ async fn parse_raw_config(file_content: &str) -> Result<RawConfig, ConfigErrorKi
             "allow_sha1" => {
                 let value = params::parse_boolean(v).map_err(|e| ParseConfigError::new(num, e))?;
                 config.allow_sha1 = Some(value);
+            }
+            "dry_run" => {
+                let value = params::parse_boolean(v).map_err(|e| ParseConfigError::new(num, e))?;
+                config.dry_run = Some(value);
             }
             _ => {
                 let mut inserted_param;
@@ -546,7 +551,9 @@ async fn build_config(
     let trust_authenticated_senders = raw_config.trust_authenticated_senders.unwrap_or(true);
     let trusted_networks = raw_config.trusted_networks.unwrap_or_default();
 
-    let fail_if_expired = raw_config.fail_if_expired.unwrap_or(true);
+    let dry_run = opts.dry_run || raw_config.dry_run.unwrap_or(false);
+
+    let allow_expired = raw_config.allow_expired.unwrap_or(false);
     let min_key_bits = raw_config.min_key_bits.unwrap_or(1024);
     let allow_sha1 = raw_config.allow_sha1.unwrap_or(false);
 
@@ -555,7 +562,7 @@ async fn build_config(
 
     let config = Config {
         authserv_id: raw_config.authserv_id,
-        fail_if_expired,
+        allow_expired,
         min_key_bits,
         allow_sha1,
         log_config,
@@ -566,6 +573,7 @@ async fn build_config(
         socket,
         trust_authenticated_senders,
         trusted_networks,
+        dry_run,
     };
 
     Ok(config)
