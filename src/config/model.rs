@@ -216,6 +216,22 @@ pub enum Expiration {
     After(Duration),  // non-zero
 }
 
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub enum RejectFailure {
+    Missing,
+    Failing,
+    AuthorMismatch,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct RejectFailures(pub HashSet<RejectFailure>);
+
+#[derive(Clone, Debug, Default)]
+pub struct ConfigOverrides {
+    pub signing_config: PartialSigningConfig,
+    pub verification_config: PartialVerificationConfig,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct SigningConfig {
     pub default_signed_headers: Vec<SignedFieldName>,  // must include From
@@ -407,13 +423,19 @@ impl PartialSigningConfig {
 }
 
 #[derive(Clone, Debug)]
+pub struct OverrideNetworkEntry {
+    pub net: IpNet,
+    pub config: ConfigOverrides,
+}
+
+#[derive(Clone, Debug)]
 pub struct OverrideEntry {
     pub expr: Regex,
-    pub config: PartialSigningConfig,
+    pub config: ConfigOverrides,
 }
 
 #[derive(Clone, Debug, Default)]
-pub struct SigningOverrides {
+pub struct OverrideEntries {
     pub entries: Vec<OverrideEntry>,
 }
 
@@ -431,4 +453,70 @@ pub struct SenderEntry {
     // TODO no longer "_name"
     pub key_name: Arc<SigningKey>,
     pub signing_config: Option<PartialSigningConfig>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct VerificationConfig {
+    pub allow_expired: bool,
+    pub allow_sha1: bool,
+    pub min_key_bits: usize,
+    pub reject_failures: RejectFailures,
+}
+
+impl VerificationConfig {
+    pub fn combine_with(&self, overrides: &PartialVerificationConfig) -> Self {
+        // TODO avoid cloning
+        let mut config = self.clone();
+        if let Some(allow_expired) = overrides.allow_expired {
+            config.allow_expired = allow_expired;
+        }
+        if let Some(allow_sha1) = overrides.allow_sha1 {
+            config.allow_sha1 = allow_sha1;
+        }
+        if let Some(min_key_bits) = overrides.min_key_bits {
+            config.min_key_bits = min_key_bits;
+        }
+        if let Some(reject_failures) = &overrides.reject_failures {
+            config.reject_failures = reject_failures.clone();
+        }
+        config
+    }
+}
+
+impl Default for VerificationConfig {
+    fn default() -> Self {
+        Self {
+            allow_expired: false,
+            allow_sha1: false,
+            min_key_bits: 1024,
+            reject_failures: Default::default(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct PartialVerificationConfig {
+    pub allow_expired: Option<bool>,
+    pub allow_sha1: Option<bool>,
+    pub min_key_bits: Option<usize>,
+    pub reject_failures: Option<RejectFailures>,
+}
+
+impl PartialVerificationConfig {
+    pub fn into_verification_config(self) -> VerificationConfig {
+        let mut config = VerificationConfig::default();
+        if let Some(allow_expired) = self.allow_expired {
+            config.allow_expired = allow_expired;
+        }
+        if let Some(allow_sha1) = self.allow_sha1 {
+            config.allow_sha1 = allow_sha1;
+        }
+        if let Some(min_key_bits) = self.min_key_bits {
+            config.min_key_bits = min_key_bits;
+        }
+        if let Some(reject_failures) = self.reject_failures {
+            config.reject_failures = reject_failures;
+        }
+        config
+    }
 }

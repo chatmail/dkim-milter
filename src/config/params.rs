@@ -1,6 +1,9 @@
 use crate::config::{
-    model::{Expiration, OversignedHeaders, SignedFieldName, SignedHeaders, TrustedNetworks},
     format::ParseParamError,
+    model::{
+        Expiration, OversignedHeaders, RejectFailure, RejectFailures, SignedFieldName,
+        SignedHeaders, TrustedNetworks,
+    },
 };
 use std::{
     collections::HashSet,
@@ -179,6 +182,23 @@ fn parse_expiration_duration(s: &str) -> Result<Duration, ParseIntError> {
         NonZeroU32::from_str(s.trim_end())?
     };
     Ok(Duration::from_secs(seconds.get().into()))
+}
+
+pub fn parse_reject_failures(s: &str) -> Result<RejectFailures, ParseParamError> {
+    let mut set = HashSet::new();
+
+    for value in split_at_comma(s) {
+        let value = value?;
+        let value = match value {
+            "missing" => RejectFailure::Missing,
+            "failing" => RejectFailure::Failing,
+            "author-mismatch" => RejectFailure::AuthorMismatch,
+            _ => return Err(ParseParamError::InvalidRejectFailure(value.into())),
+        };
+        set.insert(value);
+    }
+
+    Ok(RejectFailures(set))
 }
 
 // colon cannot appear in field names, so is a good choice for the separator

@@ -3,8 +3,8 @@
 use crate::config::{
     self,
     model::{
-        LogDestination, LogLevel, OperationMode, PartialSigningConfig, SenderEntry, SigningSenders,
-        Socket, TrustedNetworks,
+        ConfigOverrides, LogDestination, LogLevel, OperationMode, PartialSigningConfig,
+        PartialVerificationConfig, SenderEntry, SigningSenders, Socket, TrustedNetworks,
     },
     params,
     tables::{self, TableError},
@@ -75,8 +75,12 @@ impl Error for ParseConfigError {
             | InvalidHashAlgorithm(_)
             | InvalidCanonicalization(_)
             | InvalidExpiration(_)
+            | InvalidRejectFailure(_)
             | InvalidMode(_) => None,
-            ReadSigningKeys(e) | ReadSigningSenders(e) | ReadRecipientOverrides(e) => Some(e),
+            ReadSigningKeys(e)
+            | ReadSigningSenders(e)
+            | ReadConnectionOverrides(e)
+            | ReadRecipientOverrides(e) => Some(e),
         }
     }
 }
@@ -106,8 +110,12 @@ impl Display for ParseConfigError {
             | InvalidHashAlgorithm(_)
             | InvalidCanonicalization(_)
             | InvalidExpiration(_)
+            | InvalidRejectFailure(_)
             | InvalidMode(_) => write!(f, ": {}", self.kind),
-            ReadSigningKeys(_) | ReadSigningSenders(_) | ReadRecipientOverrides(_) => Ok(()),
+            ReadSigningKeys(_)
+            | ReadSigningSenders(_)
+            | ReadConnectionOverrides(_)
+            | ReadRecipientOverrides(_) => Ok(()),
         }
     }
 }
@@ -136,9 +144,11 @@ pub enum ParseParamError {
     InvalidCanonicalization(String),
     InvalidExpiration(String),
     InvalidMode(String),
+    InvalidRejectFailure(String),
 
     ReadSigningKeys(TableError),
     ReadSigningSenders(TableError),
+    ReadConnectionOverrides(TableError),
     ReadRecipientOverrides(TableError),
 }
 
@@ -169,9 +179,11 @@ impl Display for ParseParamError {
             Self::InvalidCanonicalization(s) => write!(f, "invalid canonicalization \"{s}\""),
             Self::InvalidExpiration(s) => write!(f, "invalid expiration duration \"{s}\""),
             Self::InvalidMode(s) => write!(f, "invalid operation mode \"{s}\""),
+            Self::InvalidRejectFailure(s) => write!(f, "invalid rejection specification \"{s}\""),
 
             Self::ReadSigningKeys(_) => write!(f, "failed to read signing keys"),
             Self::ReadSigningSenders(_) => write!(f, "failed to read signing senders"),
+            Self::ReadConnectionOverrides(_) => write!(f, "failed to read connection overrides"),
             Self::ReadRecipientOverrides(_) => write!(f, "failed to read recipient overrides"),
         }
     }
@@ -186,20 +198,19 @@ pub struct PartialLogConfig {
 #[derive(Clone, Debug, Default)]
 pub struct RawConfig {
     pub authserv_id: Option<String>,
-    pub allow_expired: Option<bool>,
-    pub min_key_bits: Option<usize>,
-    pub allow_sha1: Option<bool>,
+    pub connection_overrides_file: Option<(usize, String)>,
+    pub delete_incoming_authentication_results: Option<bool>,
+    pub dry_run: Option<bool>,
+    pub log_config: PartialLogConfig,
     pub mode: Option<OperationMode>,
     pub recipient_overrides_file: Option<(usize, String)>,
+    pub signing_config: PartialSigningConfig,
     pub signing_keys_file: Option<(usize, String)>,
     pub signing_senders_file: Option<(usize, String)>,
     pub socket: Option<Socket>,
     pub trust_authenticated_senders: Option<bool>,
     pub trusted_networks: Option<TrustedNetworks>,
-    pub dry_run: Option<bool>,
-
-    pub log_config: PartialLogConfig,
-    pub signing_config: PartialSigningConfig,
+    pub verification_config: PartialVerificationConfig,
 }
 
 pub async fn read_log_config(opts: &CliOptions) -> Result<LogConfig, ConfigError> {
@@ -302,6 +313,23 @@ async fn read_signing_config(
     Ok(signing_senders)
 }
 
+pub async fn read_config_overrides(
+    file_name: &str,
+) -> Result<ConfigOverrides, ConfigError> {
+    async {
+        let file_content = fs::read_to_string(file_name).await?;
+
+        let overrides = parse_config_overrides(&file_content).await?;
+
+        Ok(overrides)
+    }
+    .await
+    .map_err(|e| ConfigError {
+        file: file_name.into(),
+        kind: e,
+    })
+}
+
 pub async fn read_signing_config_overrides(
     file_name: &str,
 ) -> Result<PartialSigningConfig, ConfigError> {
@@ -362,6 +390,43 @@ async fn parse_partial_log_config(
     Ok(config)
 }
 
+async fn parse_config_overrides(
+    file_content: &str,
+) -> Result<ConfigOverrides, ParseConfigError> {
+    let mut signing_config = PartialSigningConfig::default();
+    let mut verification_config = PartialVerificationConfig::default();
+
+    let mut keys_seen = HashSet::new();
+
+    for entry in iter_params(file_content) {
+        let Entry { key: k, value: v, ln: num } = entry?;
+
+        if keys_seen.contains(k) {
+            let kind = ParseParamError::DuplicateKey(k.into());
+            return Err(ParseConfigError::new(num, kind));
+        }
+
+        let mut inserted_param = parse_signing_config_param(&mut signing_config, k, v)
+            .map_err(|e| ParseConfigError::new(num, e))?;
+
+        if !inserted_param {
+            inserted_param = parse_verification_config_param(&mut verification_config, k, v)
+                .map_err(|e| ParseConfigError::new(num, e))?;
+        }
+
+        if !inserted_param {
+            return Err(ParseConfigError::new(num, ParseParamError::UnknownKey(k.into())));
+        }
+
+        keys_seen.insert(k);
+    }
+
+    Ok(ConfigOverrides {
+        signing_config,
+        verification_config,
+    })
+}
+
 async fn parse_signing_config_overrides(
     file_content: &str,
 ) -> Result<PartialSigningConfig, ParseConfigError> {
@@ -397,8 +462,7 @@ pub struct Entry<'a> {
 }
 
 fn iter_params(file_content: &str) -> impl Iterator<Item = Result<Entry<'_>, ParseConfigError>> {
-    let iter = lines(file_content);
-    iter.map(|(num, line)| match line.split_once('=') {
+    lines(file_content).map(|(num, line)| match line.split_once('=') {
         Some((k, v)) => Ok(Entry {
             ln: num,
             key: k.trim(),
@@ -445,8 +509,15 @@ async fn parse_raw_config(file_content: &str) -> Result<RawConfig, ConfigErrorKi
             "signing_senders" => {
                 config.signing_senders_file = Some((num, v.into()));
             }
+            "connection_overrides" => {
+                config.connection_overrides_file = Some((num, v.into()));
+            }
             "recipient_overrides" => {
                 config.recipient_overrides_file = Some((num, v.into()));
+            }
+            "delete_incoming_authentication_results" => {
+                let value = params::parse_boolean(v).map_err(|e| ParseConfigError::new(num, e))?;
+                config.delete_incoming_authentication_results = Some(value);
             }
             "trust_authenticated_senders" => {
                 let value = params::parse_boolean(v).map_err(|e| ParseConfigError::new(num, e))?;
@@ -465,18 +536,6 @@ async fn parse_raw_config(file_content: &str) -> Result<RawConfig, ConfigErrorKi
                 })?;
                 config.mode = Some(value);
             }
-            "allow_expired" => {
-                let value = params::parse_boolean(v).map_err(|e| ParseConfigError::new(num, e))?;
-                config.allow_expired = Some(value);
-            }
-            "min_key_bits" => {
-                let value = params::parse_u32_as_usize(v).map_err(|e| ParseConfigError::new(num, e))?;
-                config.min_key_bits = Some(value);
-            }
-            "allow_sha1" => {
-                let value = params::parse_boolean(v).map_err(|e| ParseConfigError::new(num, e))?;
-                config.allow_sha1 = Some(value);
-            }
             "dry_run" => {
                 let value = params::parse_boolean(v).map_err(|e| ParseConfigError::new(num, e))?;
                 config.dry_run = Some(value);
@@ -489,6 +548,11 @@ async fn parse_raw_config(file_content: &str) -> Result<RawConfig, ConfigErrorKi
 
                 if !inserted_param {
                     inserted_param = parse_signing_config_param(&mut config.signing_config, k, v)
+                        .map_err(|e| ParseConfigError::new(num, e))?;
+                }
+
+                if !inserted_param {
+                    inserted_param = parse_verification_config_param(&mut config.verification_config, k, v)
                         .map_err(|e| ParseConfigError::new(num, e))?;
                 }
 
@@ -533,6 +597,19 @@ async fn build_config(
         }
     };
 
+    let connection_overrides = match raw_config.connection_overrides_file {
+        Some(connection_overrides_file) => {
+            let overrides = tables::read_connection_overrides_table(&connection_overrides_file.1)
+                .await
+                .map_err(|e| ParseConfigError::new(
+                    connection_overrides_file.0,
+                    ParseParamError::ReadConnectionOverrides(e),
+                ))?;
+            Some(overrides)
+        }
+        None => None,
+    };
+
     let recipient_overrides = match raw_config.recipient_overrides_file {
         Some(recipient_overrides_file) => {
             let overrides = tables::read_recipient_overrides_table(&recipient_overrides_file.1)
@@ -548,23 +625,21 @@ async fn build_config(
 
     let mode = raw_config.mode.unwrap_or_default();
 
+    let delete_incoming_authentication_results = raw_config.delete_incoming_authentication_results.unwrap_or(true);
     let trust_authenticated_senders = raw_config.trust_authenticated_senders.unwrap_or(true);
     let trusted_networks = raw_config.trusted_networks.unwrap_or_default();
 
     let dry_run = opts.dry_run || raw_config.dry_run.unwrap_or(false);
 
-    let allow_expired = raw_config.allow_expired.unwrap_or(false);
-    let min_key_bits = raw_config.min_key_bits.unwrap_or(1024);
-    let allow_sha1 = raw_config.allow_sha1.unwrap_or(false);
-
     let signing_config = raw_config.signing_config.into_signing_config()
         .map_err(|_| ValidationError::IncompatibleSigningConfigOverrides)?;
+    let verification_config = raw_config.verification_config.into_verification_config();
 
     let config = Config {
         authserv_id: raw_config.authserv_id,
-        allow_expired,
-        min_key_bits,
-        allow_sha1,
+        connection_overrides,
+        delete_incoming_authentication_results,
+        dry_run,
         log_config,
         mode,
         recipient_overrides,
@@ -573,7 +648,7 @@ async fn build_config(
         socket,
         trust_authenticated_senders,
         trusted_networks,
-        dry_run,
+        verification_config,
     };
 
     Ok(config)
@@ -646,6 +721,33 @@ fn parse_signing_config_param(
         "request_reports" => {
             let value = params::parse_boolean(v)?;
             config.request_reports = Some(value);
+        }
+        _ => return Ok(false),
+    }
+    Ok(true)
+}
+
+fn parse_verification_config_param(
+    config: &mut PartialVerificationConfig,
+    k: &str,
+    v: &str,
+) -> Result<bool, ParseParamError> {
+    match k {
+        "allow_expired" => {
+            let value = params::parse_boolean(v)?;
+            config.allow_expired = Some(value);
+        }
+        "min_key_bits" => {
+            let value = params::parse_u32_as_usize(v)?;
+            config.min_key_bits = Some(value);
+        }
+        "allow_sha1" => {
+            let value = params::parse_boolean(v)?;
+            config.allow_sha1 = Some(value);
+        }
+        "reject_failures" => {
+            let value = params::parse_reject_failures(v)?;
+            config.reject_failures = Some(value);
         }
         _ => return Ok(false),
     }

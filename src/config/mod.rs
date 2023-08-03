@@ -11,8 +11,8 @@ use crate::{
     config::{
         format::{ParseConfigError, ValidationError},
         model::{
-            LogDestination, LogLevel, OperationMode, SigningConfig, SigningOverrides,
-            SigningSenders, Socket, TrustedNetworks,
+            LogDestination, LogLevel, OperationMode, SigningConfig, OverrideEntries,
+            SigningSenders, Socket, TrustedNetworks, VerificationConfig, OverrideNetworkEntry,
         },
     },
     resolver::{DomainResolver, Resolver},
@@ -44,12 +44,12 @@ pub struct CliOptions {
     pub socket: Option<Socket>,
 }
 
-pub struct RuntimeConfig {
+pub struct SessionConfig {
     pub config: Config,
     pub resolver: Resolver,
 }
 
-impl RuntimeConfig {
+impl SessionConfig {
     pub fn new(config: Config) -> Self {
         let resolver = Resolver::Live(DomainResolver::new());
         Self { config, resolver }
@@ -134,19 +134,18 @@ impl LogConfig {
 
 pub struct Config {
     pub authserv_id: Option<String>,
-    pub allow_expired: bool,
-    pub min_key_bits: usize,
-    pub allow_sha1: bool,
+    pub connection_overrides: Option<Vec<OverrideNetworkEntry>>,
+    pub delete_incoming_authentication_results: bool,
+    pub dry_run: bool,
+    pub log_config: LogConfig,
     pub mode: OperationMode,
-    pub recipient_overrides: Option<SigningOverrides>,
+    pub recipient_overrides: Option<OverrideEntries>,
+    pub signing_config: SigningConfig,
     pub signing_senders: SigningSenders,
     pub socket: Socket,
     pub trust_authenticated_senders: bool,
     pub trusted_networks: TrustedNetworks,
-    pub dry_run: bool,
-
-    pub log_config: LogConfig,
-    pub signing_config: SigningConfig,
+    pub verification_config: VerificationConfig,
 }
 
 impl Config {
@@ -160,18 +159,18 @@ impl fmt::Debug for Config {
         // TODO
         f.debug_struct("Config")
             .field("authserv_id", &self.authserv_id)
-            .field("allow_expired", &self.allow_expired)
-            .field("min_key_bits", &self.min_key_bits)
-            .field("allow_sha1", &self.allow_sha1)
+            .field("connection_overrides", &self.connection_overrides)
+            .field("delete_incoming_authentication_results", &self.delete_incoming_authentication_results)
+            .field("dry_run", &self.dry_run)
+            .field("log_config", &self.log_config)
             .field("mode", &self.mode)
             .field("recipient_overrides", &self.recipient_overrides)
+            .field("signing_config", &self.signing_config)
             .field("signing_senders", &"<omitted>")
             .field("socket", &self.socket)
             .field("trust_authenticated_senders", &self.trust_authenticated_senders)
             .field("trusted_networks", &self.trusted_networks)
-            .field("log_config", &self.log_config)
-            .field("signing_config", &self.signing_config)
-            .field("dry_run", &self.dry_run)
+            .field("verification_config", &self.verification_config)
             .finish()
     }
 }

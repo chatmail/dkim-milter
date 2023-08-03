@@ -1,10 +1,10 @@
-use crate::{config::RuntimeConfig, session::Session};
+use crate::{config::SessionConfig, session::Session};
 use byte_strings::c_str;
 use indymilter::{
     Actions, Callbacks, Context, EomContext, MacroStage, Macros, NegotiateContext, ProtoOpts,
     SocketInfo, Status,
 };
-use log::error;
+use log::{warn, error};
 use std::{
     borrow::Cow,
     ffi::{CStr, CString},
@@ -36,10 +36,10 @@ impl MacrosExt for Macros {
     }
 }
 
-pub fn make_callbacks(runtime: Arc<RwLock<Arc<RuntimeConfig>>>) -> Callbacks<Session> {
+pub fn make_callbacks(session_config: Arc<RwLock<Arc<SessionConfig>>>) -> Callbacks<Session> {
     Callbacks::new()
         .on_negotiate(move |cx, actions, opts| {
-            Box::pin(handle_negotiate(runtime.clone(), cx, actions, opts))
+            Box::pin(handle_negotiate(session_config.clone(), cx, actions, opts))
         })
         .on_connect(|cx, _, socket_info| Box::pin(handle_connect(cx, socket_info)))
         .on_mail(|cx, smtp_args| Box::pin(handle_mail(cx, smtp_args)))
@@ -53,41 +53,53 @@ pub fn make_callbacks(runtime: Arc<RwLock<Arc<RuntimeConfig>>>) -> Callbacks<Ses
 }
 
 async fn handle_negotiate(
-    runtime: Arc<RwLock<Arc<RuntimeConfig>>>,
+    session_config: Arc<RwLock<Arc<SessionConfig>>>,
     context: &mut NegotiateContext<Session>,
     supported_actions: Actions,
     supported_opts: ProtoOpts,
 ) -> Status {
-    let runtime = runtime
+    let session_config = session_config
         .read()
         .expect("could not get configuration read lock")
         .clone();
 
-    // Log unsupported actions and protocol options at error level, the milter
-    // library will abort the connection when this callback returns.
+    let config = &session_config.config;
 
-    if !runtime.config.dry_run {
+    // Log unsupported required actions and protocol options at error level, the
+    // milter library will abort the connection when this callback returns.
+
+    if !config.dry_run {
         if !supported_actions.contains(Actions::ADD_HEADER) {
             error!("MTA does not support adding headers, aborting");
         }
         context.requested_actions |= Actions::ADD_HEADER;
+
+        if config.delete_incoming_authentication_results {
+            if !supported_actions.contains(Actions::CHANGE_HEADER) {
+                error!("MTA does not support altering headers, aborting");
+            }
+            context.requested_actions |= Actions::CHANGE_HEADER;
+        }
     }
 
-    if !supported_opts.contains(ProtoOpts::SKIP) {
-        error!("MTA does not support skipping repeated callback calls, aborting");
+    let can_skip = supported_opts.contains(ProtoOpts::SKIP);
+    if can_skip {
+        context.requested_opts |= ProtoOpts::SKIP;
+    } else {
+        warn!("MTA does not support skipping repeated callback calls");
     }
+
     if !supported_opts.contains(ProtoOpts::LEADING_SPACE) {
         error!("MTA does not support accurate whitespace handling in headers, aborting");
     }
-
-    context.requested_opts |= ProtoOpts::SKIP | ProtoOpts::LEADING_SPACE;
+    context.requested_opts |= ProtoOpts::LEADING_SPACE;
 
     let macros = &mut context.requested_macros;
     macros.insert(MacroStage::Connect, c_str!("j").into());
     macros.insert(MacroStage::Mail, c_str!("{auth_type}").into());
     macros.insert(MacroStage::Data, c_str!("i").into());
 
-    context.data = Some(Session::new(runtime));
+    context.data = Some(Session::new(session_config, can_skip));
 
     Status::Continue
 }
@@ -166,7 +178,10 @@ async fn handle_body(context: &mut Context<Session>, chunk: impl AsRef<[u8]>) ->
     let id = context.macros.queue_id();
 
     match session.process_body_chunk(chunk.as_ref()) {
-        Ok(status) => status,
+        Ok(status) => match status {
+            Status::Skip if !session.can_skip() => Status::Continue,
+            status => status,
+        },
         Err(e) => {
             error!("{id}: failed to handle body callback: {e}");
             Status::Tempfail
@@ -178,7 +193,7 @@ async fn handle_eom(context: &mut EomContext<Session>) -> Status {
     let session = get_session!(context);
     let id = context.macros.queue_id();
 
-    match session.finish_message(&id, &context.actions).await {
+    match session.finish_message(&id, &mut context.reply, &context.actions).await {
         Ok(status) => status,
         Err(e) => {
             error!("{id}: failed to handle eom callback: {e}");

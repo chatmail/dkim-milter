@@ -1,16 +1,16 @@
 use crate::{
     config::{
         model::{
-            Expiration, OversignedHeaders, PartialSigningConfig, SignedFieldName, SignedHeaders,
-            SigningConfig, SigningOverrides,
+            Expiration, OverrideEntries, OverrideNetworkEntry, OversignedHeaders,
+            PartialSigningConfig, SignedFieldName, SignedHeaders, SigningConfig,
         },
-        Config, RuntimeConfig,
+        Config,
     },
     session::SenderMatch,
 };
 use indymilter::{ActionError, ContextActions, Status};
 use log::{error, info};
-use std::{collections::HashSet, error::Error, sync::Arc};
+use std::{collections::HashSet, error::Error, net::IpAddr, sync::Arc};
 use viadkim::{
     crypto::SigningKey,
     header::{FieldName, HeaderFields},
@@ -25,7 +25,8 @@ pub struct Signer {
 
 impl Signer {
     pub fn init(
-        runtime: &RuntimeConfig,
+        config: &Config,
+        ip: Option<IpAddr>,
         recipients: &[String],
         headers: HeaderFields,
         matches: Vec<SenderMatch>,
@@ -33,14 +34,22 @@ impl Signer {
         assert!(!matches.is_empty());
 
         // TODO
-        // at this point there is one or more signature to be generated;
-        // first check if there are config overrides for the recipients!
 
-        let recipient_overrides = runtime
-            .config
+        let connection_overrides = config
+            .connection_overrides
+            .as_ref()
+            .and_then(|overrides| find_matching_connection_overrides(overrides, ip));
+
+        let recipient_overrides = config
             .recipient_overrides
             .as_ref()
             .and_then(|overrides| find_matching_recipient_overrides(overrides, recipients));
+
+        let base_overrides_config = match (connection_overrides, recipient_overrides) {
+            (Some(o1), Some(o2)) => Some(o1.combine_with(&o2)),
+            (Some(o), None) | (None, Some(o)) => Some(o),
+            (None, None) => None,
+        };
 
         // step through matches and create SignRequest for each match
 
@@ -50,16 +59,17 @@ impl Signer {
             let selector = match_.selector;
             let signing_key = match_.key;
 
-            let config = match (&match_.signing_config, &recipient_overrides) {
+            let signing_config = match (&match_.signing_config, &base_overrides_config) {
                 (Some(c1), Some(c2)) => {
+                    // TODO shouldn't c1 override c2?
                     let combined = c1.combine_with(c2);
-                    runtime.config.signing_config.combine_with(&combined)
+                    config.signing_config.combine_with(&combined)
                 }
-                (Some(c), None) | (None, Some(c)) => runtime.config.signing_config.combine_with(c),
-                (None, None) => Ok(runtime.config.signing_config.clone()),
+                (Some(c), None) | (None, Some(c)) => config.signing_config.combine_with(c),
+                (None, None) => Ok(config.signing_config.clone()),
             };
 
-            let config = match config {
+            let signing_config = match signing_config {
                 Ok(config) => config,
                 Err(e) => {
                     error!("failed to construct valid signing configuration, ignoring request: {e}");
@@ -67,7 +77,7 @@ impl Signer {
                 }
             };
 
-            match make_sign_request(&config, &headers, domain, selector, signing_key) {
+            match make_sign_request(&signing_config, &headers, domain, selector, signing_key) {
                 Ok(request) => {
                     requests.push(request);
                 }
@@ -130,8 +140,22 @@ impl Signer {
     }
 }
 
+fn find_matching_connection_overrides(
+    connection_overrides: &[OverrideNetworkEntry],
+    ip: Option<IpAddr>,
+) -> Option<PartialSigningConfig> {
+    if let Some(ip) = ip {
+        for entry in connection_overrides {
+            if entry.net.contains(&ip) {
+                return Some(entry.config.signing_config.clone());
+            }
+        }
+    }
+    None
+}
+
 fn find_matching_recipient_overrides(
-    recipient_overrides: &SigningOverrides,
+    recipient_overrides: &OverrideEntries,
     recipients: &[String],
     // from_address: &EmailAddr,
 ) -> Option<PartialSigningConfig> {
@@ -139,11 +163,10 @@ fn find_matching_recipient_overrides(
         // TODO ensure is parsable as email addr
         for overrides in &recipient_overrides.entries {
             if overrides.expr.is_match(recipient) {
-                return Some(overrides.config.clone());
+                return Some(overrides.config.signing_config.clone());
             }
         }
     }
-
     None
 }
 
@@ -157,10 +180,10 @@ fn make_sign_request(
     let key_type = signing_key.key_type();
 
     let hash_algorithm = config.hash_algorithm;
-    let signature_alg = SigningAlgorithm::from_parts(key_type, hash_algorithm)
+    let alg = SigningAlgorithm::from_parts(key_type, hash_algorithm)
         .ok_or("invalid key type/hash algorithm pair")?;
 
-    let mut request = SignRequest::new(domain, selector, signature_alg, signing_key);
+    let mut request = SignRequest::new(domain, selector, alg, signing_key);
 
     request.canonicalization = config.canonicalization;
 

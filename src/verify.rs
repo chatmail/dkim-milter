@@ -1,26 +1,42 @@
 use crate::{
     auth_results,
-    config::{Config, RuntimeConfig},
+    config::{
+        model::{RejectFailure, VerificationConfig},
+        Config, SessionConfig,
+    },
+    format::EmailAddr,
     resolver::Resolver,
+    session::FromAddrError,
 };
-use indymilter::{ActionError, ContextActions, Status};
+use indymilter::{ContextActions, SetErrorReply, Status};
 use log::{debug, info};
-use std::{cmp, error::Error};
+use std::{cmp, error::Error, net::IpAddr};
 use viadkim::{
     header::HeaderFields,
     message_hash::BodyHasherStance,
+    signature::DkimSignature,
     verifier::{self, VerificationError, VerificationResult, VerificationStatus},
 };
 
 pub struct Verifier {
     delegate: Option<viadkim::Verifier>,
+    config: VerificationConfig,
 }
 
 impl Verifier {
-    pub async fn init(runtime: &RuntimeConfig, headers: HeaderFields) -> Self {
-        let allow_expired = runtime.config.allow_expired;
-        let min_key_bits = runtime.config.min_key_bits;
-        let allow_sha1 = runtime.config.allow_sha1;
+    pub async fn init(
+        session_config: &SessionConfig,
+        headers: HeaderFields,
+        ip: Option<IpAddr>,
+        recipients: &[String],
+    ) -> Self {
+        let config = &session_config.config;
+
+        let vconfig = assemble_verification_config(ip, recipients, config);
+
+        let allow_expired = vconfig.allow_expired;
+        let min_key_bits = vconfig.min_key_bits;
+        let allow_sha1 = vconfig.allow_sha1;
 
         let config = verifier::Config {
             allow_expired,
@@ -29,14 +45,17 @@ impl Verifier {
             ..Default::default()
         };
 
-        let verifier = match &runtime.resolver {
+        let verifier = match &session_config.resolver {
             Resolver::Live(r) => viadkim::Verifier::verify_header(r, &headers, &config).await,
             Resolver::Mock(r) => {
                 viadkim::Verifier::verify_header(r.as_ref(), &headers, &config).await
             }
         };
 
-        Self { delegate: verifier }
+        Self {
+            delegate: verifier,
+            config: vconfig,
+        }
     }
 
     pub fn process_body_chunk(&mut self, chunk: &[u8]) -> Result<Status, Box<dyn Error>> {
@@ -57,23 +76,76 @@ impl Verifier {
         id: &str,
         config: &Config,
         authserv_id: &str,
+        from_addresses: Option<&Result<Vec<EmailAddr>, FromAddrError>>,
+        reply: &mut impl SetErrorReply,
         actions: &impl ContextActions,
-    ) -> Result<Status, ActionError> {
+    ) -> Result<Status, Box<dyn Error>> {
         let sigs = if let Some(verifier) = self.delegate {
             verifier.finish()
         } else {
             vec![]
         };
 
-        for sig in &sigs {
-            // TODO
+        #[derive(PartialEq)]
+        enum SigStatus {
+            Missing,  // no signature present
+            Failing,  // no passing signature present
+            Passing,  // a passing signature (not matching author domain) is present
+            PassingFrom,  // a passing signature with author domain match is present
+        }
 
-            let testing = "testing mode";
+        let mut sig_status = SigStatus::Missing;
+
+        // log all sigs, and determine status for potential rejection
+
+        for sig in &sigs {
+            // first, update sig status
+            let is_testing = sig.key_record.as_ref().map_or(false, |r| r.is_testing_mode());
+
+            // DKIM key records in testing mode are treated as passing!
+
+            match sig_status {
+                SigStatus::Missing => {
+                    // set status to Failing|Passing|PassingFrom as appropriate
+                    if sig.status == VerificationStatus::Success || is_testing {
+                        if is_author_matched_domain(sig.signature.as_ref(), from_addresses) {
+                            sig_status = SigStatus::PassingFrom;
+                        } else {
+                            sig_status = SigStatus::Passing;
+                        }
+                    } else {
+                        sig_status = SigStatus::Failing;
+                    }
+                }
+                SigStatus::Failing => {
+                    // check for Passing|PassingFrom and upgrade if appropriate
+                    if sig.status == VerificationStatus::Success || is_testing {
+                        if is_author_matched_domain(sig.signature.as_ref(), from_addresses) {
+                            sig_status = SigStatus::PassingFrom;
+                        } else {
+                            sig_status = SigStatus::Passing;
+                        }
+                    }
+                }
+                SigStatus::Passing => {
+                    // check for PassingFrom and upgrade if appropriate
+                    if sig.status == VerificationStatus::Success || is_testing {
+                        if is_author_matched_domain(sig.signature.as_ref(), from_addresses) {
+                            sig_status = SigStatus::PassingFrom;
+                        }
+                    }
+                }
+                SigStatus::PassingFrom => {}  // no-op
+            }
+
+            // now log
+
+            let testing = "test mode";
 
             let comment;
             let comment = match (
                 auth_results::auth_results_reason_from_status(&sig.status),
-                sig.key_record.as_ref().map_or(false, |r| r.is_testing_mode()),
+                is_testing,
             ) {
                 (None, false) => "",
                 (None, true) => {
@@ -98,6 +170,45 @@ impl Verifier {
             );
         }
 
+        // See RFC 7372, section 3.1 for these rejections.
+        // We don't make distinction between passing and acceptable signatures,
+        // so use these status codes slightly differently.
+
+        let rejects = &self.config.reject_failures.0;
+
+        if rejects.contains(&RejectFailure::Missing) && sig_status == SigStatus::Missing {
+            if config.dry_run {
+                debug!("{id}: rejected message missing signature [dry run, not done]");
+                return Ok(Status::Accept);
+            } else {
+                debug!("{id}: rejected message missing signature");
+                reply.set_error_reply("550", Some("5.7.20"), ["No DKIM signature found"])?;
+                return Ok(Status::Reject);
+            }
+        }
+
+        if rejects.contains(&RejectFailure::Failing) && sig_status == SigStatus::Failing {
+            if config.dry_run {
+                debug!("{id}: rejected message without acceptable signature [dry run, not done]");
+                return Ok(Status::Accept);
+            } else {
+                debug!("{id}: rejected message without acceptable signature");
+                reply.set_error_reply("550", Some("5.7.21"), ["No acceptable DKIM signature found"])?;
+                return Ok(Status::Reject);
+            }
+        }
+
+        if rejects.contains(&RejectFailure::AuthorMismatch) && sig_status == SigStatus::Passing {
+            if config.dry_run {
+                debug!("{id}: rejected message without acceptable author-matched signature [dry run, not done]");
+                return Ok(Status::Accept);
+            } else {
+                debug!("{id}: rejected message without acceptable author-matched signature");
+                reply.set_error_reply("550", Some("5.7.22"), ["No valid author-matched DKIM signature found"])?;
+                return Ok(Status::Reject);
+            }
+        }
+
         let ar = auth_results::assemble_auth_results(authserv_id, sigs);
 
         if config.dry_run {
@@ -111,6 +222,45 @@ impl Verifier {
 
         Ok(Status::Continue)
     }
+}
+
+fn assemble_verification_config(
+    ip: Option<IpAddr>,
+    recipients: &[String],
+    config: &Config,
+) -> VerificationConfig {
+    // TODO avoid all the cloning
+
+    let mut base_config = &config.verification_config;
+
+    let merged_config;
+    if let Some(ip) = ip {
+        if let Some(connection_overrides) = &config.connection_overrides {
+            for entry in connection_overrides {
+                if entry.net.contains(&ip) {
+                    merged_config = base_config.combine_with(&entry.config.verification_config);
+                    base_config = &merged_config;
+                    break;
+                }
+            }
+        }
+    }
+
+    // TODO duplicated
+    let merged_config2;
+    'outer: for recipient in recipients {
+        if let Some(recipient_overrides) = &config.recipient_overrides {
+            for overrides in &recipient_overrides.entries {
+                if overrides.expr.is_match(recipient) {
+                    merged_config2 = base_config.combine_with(&overrides.config.verification_config);
+                    base_config = &merged_config2;
+                    break 'outer;
+                }
+            }
+        }
+    }
+
+    base_config.clone()
 }
 
 pub fn get_domain_from_verification_result(res: &VerificationResult) -> String {
@@ -149,4 +299,27 @@ pub fn get_signature_prefix_from_verification_result(res: &VerificationResult) -
             None
         }
     }
+}
+
+fn is_author_matched_domain(
+    sig: Option<&DkimSignature>,
+    from_addresses: Option<&Result<Vec<EmailAddr>, FromAddrError>>,
+) -> bool {
+    let domain = match sig {
+        Some(sig) => &sig.domain,
+        None => return false,
+    };
+
+    let from_addresses = match from_addresses {
+        Some(Ok(addrs)) => addrs,
+        _ => return false,
+    };
+
+    for addr in from_addresses {
+        if addr.domain.eq_or_subdomain_of(domain) {
+            return true;
+        }
+    }
+
+    false
 }

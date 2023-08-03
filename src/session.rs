@@ -1,14 +1,14 @@
 use crate::{
     config::{
         model::{OperationMode, PartialSigningConfig, SigningSenders},
-        Config, RuntimeConfig,
+        Config, SessionConfig,
     },
     format::{self, EmailAddr},
     sign::Signer,
     verify::Verifier,
 };
 use bstr::ByteSlice;
-use indymilter::{ContextActions, Status};
+use indymilter::{ContextActions, SetErrorReply, Status};
 use log::{debug, info};
 use std::{borrow::Cow, error::Error, mem, net::IpAddr, sync::Arc};
 use viadkim::{
@@ -64,19 +64,25 @@ impl MessageData {
 }
 
 pub struct Session {
-    runtime: Arc<RuntimeConfig>,
+    session_config: Arc<SessionConfig>,
 
+    can_skip: bool,
     conn: ConnectionData,
     message: Option<MessageData>,
 }
 
 impl Session {
-    pub fn new(runtime: Arc<RuntimeConfig>) -> Self {
+    pub fn new(session_config: Arc<SessionConfig>, can_skip: bool) -> Self {
         Self {
-            runtime,
+            session_config,
+            can_skip,
             conn: ConnectionData::new(),
             message: None,
         }
+    }
+
+    pub fn can_skip(&self) -> bool {
+        self.can_skip
     }
 
     pub fn init_connection(&mut self, ip: Option<IpAddr>, hostname: impl Into<String>) {
@@ -202,9 +208,9 @@ impl Session {
 
         // A trusted sender is eligible for signing, and is not eligible for
         // verifying.
-        let authorized = is_trusted_sender(id, &self.runtime.config, self.conn.ip, message.auth);
+        let authorized = is_trusted_sender(id, &self.session_config.config, self.conn.ip, message.auth);
 
-        let mode = match self.runtime.config.mode {
+        let mode = match self.session_config.config.mode {
             mode @ (OperationMode::Sign | OperationMode::Auto) => {
                 if authorized {
                     let sender = extract_sender(
@@ -214,7 +220,7 @@ impl Session {
                     );
 
                     let matches = match sender {
-                        Some(sender) => find_matching_senders(&self.runtime.config.signing_senders, sender),
+                        Some(sender) => find_matching_senders(&self.session_config.config.signing_senders, sender),
                         None => vec![],
                     };
 
@@ -225,16 +231,21 @@ impl Session {
                     } else {
                         debug!("{id}: entered signing mode");
 
+                        let ip = self.conn.ip;
                         let recipients = &self.message.as_ref().unwrap().recipients;
 
-                        let signer = Signer::init(&self.runtime, recipients, headers, matches)?;
+                        let signer = Signer::init(&self.session_config.config, ip, recipients, headers, matches)?;
 
                         Mode::Signing(signer)
                     }
                 } else if mode == OperationMode::Auto {
                     debug!("{id}: entered verifying mode");
 
-                    let verifier = Verifier::init(&self.runtime, headers).await;
+                    let ip = self.conn.ip;
+                    // TODO ?? why clone needed
+                    let recipients = self.message.as_ref().unwrap().recipients.clone();
+
+                    let verifier = Verifier::init(&self.session_config, headers, ip, &recipients).await;
 
                     Mode::Verifying(verifier)
                 } else {
@@ -249,7 +260,11 @@ impl Session {
                 } else {
                     debug!("{id}: entered verifying mode");
 
-                    let verifier = Verifier::init(&self.runtime, headers).await;
+                    let ip = self.conn.ip;
+                    // TODO ?? why clone needed
+                    let recipients = self.message.as_ref().unwrap().recipients.clone();
+
+                    let verifier = Verifier::init(&self.session_config, headers, ip, &recipients).await;
 
                     Mode::Verifying(verifier)
                 }
@@ -278,6 +293,7 @@ impl Session {
     pub async fn finish_message(
         &mut self,
         id: &str,
+        reply: &mut impl SetErrorReply,
         actions: &impl ContextActions,
     ) -> Result<Status, Box<dyn Error>> {
         let message = match self.message.take() {
@@ -285,17 +301,23 @@ impl Session {
             None => return Err("message context not available".into()),
         };
 
+        let config = &self.session_config.config;
+
+        if config.delete_incoming_authentication_results {
+            // TODO delete them
+        }
+
         match message.mode {
             Mode::Inactive => Ok(Status::Continue),  // not reached
             Mode::Signing(signer) => {
-                let status = signer.finish(id, &self.runtime.config, actions).await?;
+                let status = signer.finish(id, config, actions).await?;
 
                 Ok(status)
             }
             Mode::Verifying(verifier) => {
-                let authserv_id = authserv_id(&self.runtime.config, self.conn.hostname());
+                let authserv_id = authserv_id(config, self.conn.hostname());
 
-                let status = verifier.finish(id, &self.runtime.config, authserv_id, actions).await?;
+                let status = verifier.finish(id, config, authserv_id, message.from_addresses.as_ref(), reply, actions).await?;
 
                 Ok(status)
             }
@@ -334,6 +356,10 @@ fn is_trusted_sender(id: &str, config: &Config, ip: Option<IpAddr>, authenticate
 
 // See RFC 5322, section 3.6.2 for details on the relationship of the Sender and
 // From header.
+//
+// Also note RFC 6376, appendix B.2.3: ‘A common practice among systems that are
+// primarily redistributors of mail is to add a Sender header field to the
+// message to identify the address being used to sign the message.’
 fn extract_sender<'a>(
     id: &str,
     sender_address: Option<&'a Result<EmailAddr, FromAddrError>>,

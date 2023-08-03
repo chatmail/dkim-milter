@@ -100,7 +100,9 @@ Dave
     assert!(actions.has_insert_header(
         0,
         "Authentication-Results",
-        " example.gluet.ch;\n\tdkim=pass header.d=gluet.ch header.b=SSlQloji",
+        " example.gluet.ch;\n\
+        \tdkim=pass header.d=gluet.ch\n\
+        \t header.a=ed25519-sha256 header.s=sel1 header.b=SSlQloji",
     ));
 
     conn.close().await.unwrap();

@@ -1,10 +1,13 @@
 use crate::config::{
     format,
-    model::{OverrideEntry, PartialSigningConfig, SigningOverrides},
+    model::{OverrideEntries, OverrideEntry, OverrideNetworkEntry, PartialSigningConfig},
     ConfigError,
 };
+use ipnet::IpNet;
 use regex::Regex;
 use std::{
+    net::IpAddr,
+    str::FromStr,
     collections::HashMap,
     error::Error,
     fmt::{self, Display, Formatter},
@@ -98,6 +101,7 @@ impl Error for TableFormatError {
             | InvalidExpr
             | InvalidDomain
             | InvalidSelector
+            | InvalidNetwork
             | InvalidFileSyntax => None,
             ReadKeyFile(e) => Some(e),
             ReadConfig(e) => Some(e),
@@ -117,6 +121,7 @@ impl Display for TableFormatError {
             | InvalidExpr
             | InvalidDomain
             | InvalidSelector
+            | InvalidNetwork
             | InvalidFileSyntax => write!(f, ": {}", self.kind),
             ReadKeyFile(_) | ReadConfig(_) => Ok(()),
         }
@@ -130,6 +135,7 @@ pub enum TableFormatErrorKind {
     InvalidExpr,
     InvalidDomain,
     InvalidSelector,
+    InvalidNetwork,
     InvalidFileSyntax,
     ReadKeyFile(io::Error),
     ReadConfig(Box<ConfigError>),  // recursive, but never more than one level
@@ -144,6 +150,7 @@ impl Display for TableFormatErrorKind {
             Self::InvalidExpr => write!(f, "invalid match expression"),
             Self::InvalidDomain => write!(f, "invalid domain"),
             Self::InvalidSelector => write!(f, "invalid selector"),
+            Self::InvalidNetwork => write!(f, "invalid network address"),
             Self::InvalidFileSyntax => write!(f, "invalid included file syntax"),
             Self::ReadKeyFile(_) => write!(f, "invalid included key file"),
             Self::ReadConfig(_) => write!(f, "invalid included configuration"),
@@ -200,15 +207,29 @@ pub async fn read_signing_senders_table(
     .map_err(|e| TableError::new(file_name, e))
 }
 
+pub async fn read_connection_overrides_table(
+    file_name: &str,
+) -> Result<Vec<OverrideNetworkEntry>, TableError> {
+    async {
+        let file_content = fs::read_to_string(file_name).await?;
+
+        let overrides = parse_connection_overrides_table(&file_content).await?;
+
+        Ok(overrides)
+    }
+    .await
+    .map_err(|e| TableError::new(file_name, e))
+}
+
 pub async fn read_recipient_overrides_table(
     file_name: &str,
-) -> Result<SigningOverrides, TableError> {
+) -> Result<OverrideEntries, TableError> {
     async {
         let file_content = fs::read_to_string(file_name).await?;
 
         let overrides = parse_recipient_overrides_table(&file_content).await?;
 
-        Ok(SigningOverrides { entries: overrides })
+        Ok(OverrideEntries { entries: overrides })
     }
     .await
     .map_err(|e| TableError::new(file_name, e))
@@ -372,6 +393,59 @@ async fn parse_signing_keys_table(
     Ok(map)
 }
 
+async fn parse_connection_overrides_table(
+    file_content: &str,
+) -> Result<Vec<OverrideNetworkEntry>, TableFormatError> {
+    let mut entries = vec![];
+
+    let iter = format::lines(file_content);
+
+    for (num, line) in iter {
+        let mut iter = line.split_ascii_whitespace();
+
+        let network_expr = iter
+            .next()
+            .ok_or_else(|| TableFormatError::new(num, TableFormatErrorKind::InvalidLine))?;
+        let overrides_file = iter
+            .next()
+            .ok_or_else(|| TableFormatError::new(num, TableFormatErrorKind::InvalidLine))?;
+
+        if iter.next().is_some() {
+            return Err(TableFormatError::new(num, TableFormatErrorKind::TooManyFields));
+        }
+
+        // TODO
+        let net = parse_network_expr(network_expr)
+            .map_err(|_| TableFormatError::new(num, TableFormatErrorKind::InvalidNetwork))?;
+
+        let v = overrides_file
+            .trim()
+            .strip_prefix('<')
+            .ok_or_else(|| TableFormatError::new(num, TableFormatErrorKind::InvalidFileSyntax))?
+            .trim();
+
+        let config = format::read_config_overrides(v).await.map_err(|e| {
+            TableFormatError::new(num, TableFormatErrorKind::ReadConfig(Box::new(e)))
+        })?;
+
+        let entry = OverrideNetworkEntry { net, config };
+
+        entries.push(entry);
+    }
+
+    Ok(entries)
+}
+
+fn parse_network_expr(s: &str) -> Result<IpNet, Box<dyn Error>> {
+    match IpNet::from_str(s) {
+        Ok(net) => Ok(net),
+        Err(_) => {
+            let addr = IpAddr::from_str(s)?;
+            Ok(addr.into())
+        }
+    }
+}
+
 async fn parse_recipient_overrides_table(
     file_content: &str,
 ) -> Result<Vec<OverrideEntry>, TableFormatError> {
@@ -403,7 +477,7 @@ async fn parse_recipient_overrides_table(
             .ok_or_else(|| TableFormatError::new(num, TableFormatErrorKind::InvalidFileSyntax))?
             .trim();
 
-        let config = format::read_signing_config_overrides(v).await.map_err(|e| {
+        let config = format::read_config_overrides(v).await.map_err(|e| {
             TableFormatError::new(num, TableFormatErrorKind::ReadConfig(Box::new(e)))
         })?;
 

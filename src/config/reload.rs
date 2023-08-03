@@ -1,5 +1,5 @@
 use crate::{
-    config::{get_default_config_file, CliOptions, Config, RuntimeConfig},
+    config::{get_default_config_file, CliOptions, Config, SessionConfig},
     resolver::{DomainResolver, Resolver},
 };
 use log::{error, info};
@@ -9,7 +9,7 @@ use std::{
 };
 
 // TODO
-pub async fn reload(current_runtime: &RwLock<Arc<RuntimeConfig>>, opts: &CliOptions) {
+pub async fn reload(current_session_config: &RwLock<Arc<SessionConfig>>, opts: &CliOptions) {
     let config_file = get_default_config_file(opts);
 
     let config = match Config::read(opts).await {
@@ -22,18 +22,18 @@ pub async fn reload(current_runtime: &RwLock<Arc<RuntimeConfig>>, opts: &CliOpti
 
     // TODO record params that cannot be reloaded, report later
 
-    let _old_runtime = {
-        let mut locked_runtime = current_runtime
+    let _old_cfg = {
+        let mut locked_config = current_session_config
             .write()
             .expect("could not get configuration write lock");
 
-        let resolver = match &locked_runtime.resolver {
+        let resolver = match &locked_config.resolver {
             Resolver::Live(_) => Resolver::Live(DomainResolver::new()),
             Resolver::Mock(m) => Resolver::Mock(m.clone()),
         };
-        let runtime = RuntimeConfig { config, resolver };
+        let session_config = SessionConfig { config, resolver };
 
-        mem::replace(&mut *locked_runtime, Arc::new(runtime))
+        mem::replace(&mut *locked_config, Arc::new(session_config))
     };
 
     info!("configuration reloaded from {}", config_file.display());

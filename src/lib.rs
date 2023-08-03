@@ -13,7 +13,7 @@ pub use crate::{
             LogDestination, LogLevel, ParseLogDestinationError, ParseLogLevelError,
             ParseSocketError, Socket,
         },
-        CliOptions, LogConfig, RuntimeConfig,
+        CliOptions, LogConfig, SessionConfig,
     },
     resolver::LookupFuture,
 };
@@ -174,15 +174,15 @@ pub async fn run(
 ) -> io::Result<()> {
     let Config { cli_opts, config, mock_resolver } = config;
 
-    let runtime = match mock_resolver {
-        Some(resolver) => RuntimeConfig::with_mock_resolver(config, resolver),
-        None => RuntimeConfig::new(config),
+    let session_config = match mock_resolver {
+        Some(resolver) => SessionConfig::with_mock_resolver(config, resolver),
+        None => SessionConfig::new(config),
     };
-    let runtime = Arc::new(RwLock::new(Arc::new(runtime)));
+    let session_config = Arc::new(RwLock::new(Arc::new(session_config)));
 
-    spawn_reload_task(runtime.clone(), cli_opts, reload);
+    spawn_reload_task(session_config.clone(), cli_opts, reload);
 
-    let callbacks = callbacks::make_callbacks(runtime);
+    let callbacks = callbacks::make_callbacks(session_config);
     let config = Default::default();
 
     info!("{MILTER_NAME} {VERSION} starting");
@@ -198,13 +198,13 @@ pub async fn run(
 }
 
 fn spawn_reload_task(
-    runtime: Arc<RwLock<Arc<RuntimeConfig>>>,
+    session_config: Arc<RwLock<Arc<SessionConfig>>>,
     opts: CliOptions,
     mut reload: mpsc::Receiver<()>,
 ) {
     tokio::spawn(async move {
         while let Some(()) = reload.recv().await {
-            config::reload(&runtime, &opts).await;
+            config::reload(&session_config, &opts).await;
         }
     });
 }

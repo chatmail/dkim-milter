@@ -66,12 +66,10 @@ impl LookupTxt for DomainResolver {
                 });
             }
 
-            let txts = answer
+            let results = answer
                 .answer()
                 .map_err(|_| ErrorKind::InvalidData)?
-                .limit_to::<Txt<_>>();
-
-            let results = txts
+                .limit_to::<Txt<_>>()
                 .map(|r| match r {
                     Ok(record) => {
                         let txt = record.into_data().text();

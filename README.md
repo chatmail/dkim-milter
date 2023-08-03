@@ -36,8 +36,6 @@ TODO
 DKIM Milter must be built or run from source code for now (initial development;
 working, but alpha quality).
 
-A source checkout of viadkim in a sibling directory is also required.
-
 During building and installation the option `--features pre-rfc8301` can be
 specified to revert cryptographic algorithm and key usage back to before [RFC
 8301]: it enables support for the insecure, historic SHA-1 algorithm, and allows
@@ -59,8 +57,8 @@ set in that file.
 DKIM Milter is usually set up as a system service. Use the provided systemd
 service as a starting point.
 
-The supported signature algorithms, for both signing and verifying, are
-`rsa-sha256` and `ed25519-sha256`. By default, the historic signature algorithm
+The supported signing algorithms, for both signing and verifying, are
+`rsa-sha256` and `ed25519-sha256`. By default, the historic signing algorithm
 `rsa-sha1` is not supported, evaluation of such signatures yields a *permerror*
 result (RFC 8301; but see feature `pre-rfc8301` above).
 
@@ -83,17 +81,18 @@ The configuration consists at the minimum of the main configuration file
 
 The main configuration file contains global settings.
 
-The global settings can be overridden for certain inputs through *override
-files*. For example, the `recipient_overrides` parameter can be used to specify
+The global settings can be overridden for certain inputs through *overrides* in
+table-like *override files*. Overrides can be applied to connecting network
+addresses, recipients (given in the `RCPT TO:` SMTP command), and to senders (in
+the *Sender* or *From* headers).
+
+For example, the `recipient_overrides` parameter can be used to specify
 configuration overrides for certain message recipients. This allows, for
 example, to disable use of the *l=* tag in generated signatures globally, but
 enable it for certain recipients only.
 
-Overrides can be applied to recipients (given in the `RCPT TO:` SMTP command),
-and to senders (in the *Sender* or *From* headers).
-
-This design, with main config whose parameters can be overridden with some
-granularity, should be flexible enough to implement many configuration
+This design, with main configuration whose parameters can be overridden with
+some granularity, should be flexible enough to implement many configuration
 requirements.
 
 ### Sign/verify decision
