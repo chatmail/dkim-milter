@@ -4,7 +4,8 @@ use crate::config::{
     self,
     model::{
         ConfigOverrides, LogDestination, LogLevel, OperationMode, PartialSigningConfig,
-        PartialVerificationConfig, SenderEntry, SigningSenders, Socket, TrustedNetworks,
+        PartialVerificationConfig, SenderEntry, SigningSenders, Socket, SyslogFacility,
+        TrustedNetworks,
     },
     params,
     tables::{self, TableError},
@@ -63,6 +64,7 @@ impl Error for ParseConfigError {
             | InvalidValue
             | InvalidLogDestination(_)
             | InvalidLogLevel(_)
+            | InvalidSyslogFacility(_)
             | InvalidSocket(_)
             | InvalidBoolean(_)
             | InvalidU32(_)
@@ -98,6 +100,7 @@ impl Display for ParseConfigError {
             | InvalidValue
             | InvalidLogDestination(_)
             | InvalidLogLevel(_)
+            | InvalidSyslogFacility(_)
             | InvalidSocket(_)
             | InvalidBoolean(_)
             | InvalidU32(_)
@@ -130,6 +133,7 @@ pub enum ParseParamError {
 
     InvalidLogDestination(String),
     InvalidLogLevel(String),
+    InvalidSyslogFacility(String),
 
     InvalidSocket(String),
     InvalidBoolean(String),
@@ -165,6 +169,7 @@ impl Display for ParseParamError {
 
             Self::InvalidLogDestination(s) => write!(f, "invalid log destination \"{s}\""),
             Self::InvalidLogLevel(s) => write!(f, "invalid log level \"{s}\""),
+            Self::InvalidSyslogFacility(s) => write!(f, "invalid syslog facility \"{s}\""),
 
             Self::InvalidSocket(s) => write!(f, "invalid socket \"{s}\""),
             Self::InvalidBoolean(s) => write!(f, "invalid Boolean value \"{s}\""),
@@ -193,6 +198,7 @@ impl Display for ParseParamError {
 pub struct PartialLogConfig {
     pub log_destination: Option<LogDestination>,
     pub log_level: Option<LogLevel>,
+    pub syslog_facility: Option<SyslogFacility>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -355,10 +361,12 @@ async fn parse_log_config(
 
     let log_destination = opts.log_destination.or(log_config.log_destination).unwrap_or_default();
     let log_level = opts.log_level.or(log_config.log_level).unwrap_or_default();
+    let syslog_facility = opts.syslog_facility.or(log_config.syslog_facility).unwrap_or_default();
 
     Ok(LogConfig {
         log_destination,
         log_level,
+        syslog_facility,
     })
 }
 
@@ -581,10 +589,12 @@ async fn build_config(
 
     let log_destination = opts.log_destination.or(raw_config.log_config.log_destination).unwrap_or_default();
     let log_level = opts.log_level.or(raw_config.log_config.log_level).unwrap_or_default();
+    let syslog_facility = opts.syslog_facility.or(raw_config.log_config.syslog_facility).unwrap_or_default();
 
     let log_config = LogConfig {
         log_destination,
         log_level,
+        syslog_facility,
     };
 
     let signing_senders = match (raw_config.signing_keys_file, raw_config.signing_senders_file) {
@@ -670,6 +680,11 @@ fn parse_log_config_param(
                 .map_err(|_| ParseParamError::InvalidLogLevel(v.into()))?;
             config.log_level = Some(value);
         }
+        "syslog_facility" => {
+            let value = SyslogFacility::from_str(v)
+                .map_err(|_| ParseParamError::InvalidSyslogFacility(v.into()))?;
+            config.syslog_facility = Some(value);
+        }
         _ => return Ok(false),
     }
     Ok(true)
@@ -737,9 +752,9 @@ fn parse_verification_config_param(
             let value = params::parse_boolean(v)?;
             config.allow_expired = Some(value);
         }
-        "min_key_bits" => {
+        "min_rsa_key_bits" => {
             let value = params::parse_u32_as_usize(v)?;
-            config.min_key_bits = Some(value);
+            config.min_rsa_key_bits = Some(value);
         }
         "allow_sha1" => {
             let value = params::parse_boolean(v)?;

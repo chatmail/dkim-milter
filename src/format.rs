@@ -5,6 +5,8 @@ use std::{
 };
 use viadkim::signature::DomainName;
 
+// TODO lots of code copied from SPF Milter
+
 const CRLF: &[u8] = b"\r\n";
 
 // pub type MailResult = Result<MailAddrs, ParseHeaderFromError>;
@@ -238,6 +240,28 @@ fn parse_addr_spec(input: &[u8]) -> Option<(MailAddr, &[u8])> {
     Some((addr, rest))
 }
 
+// value := token / quoted-string
+pub fn strip_mime_value(input: &[u8]) -> Option<&[u8]> {
+    strip_token(input).or_else(|| strip_quoted_string(input))
+}
+
+// fn is_token(s: &str) -> bool {
+//     matches!(strip_token(s), Some(s) if s.is_empty())
+// }
+
+// token := 1*<any (US-ASCII) CHAR except SPACE, CTLs, or tspecials>
+fn strip_token(input: &[u8]) -> Option<&[u8]> {
+    fn is_token(c: u8) -> bool {
+        c.is_ascii_graphic()
+            && !matches!(
+                c,
+                b'(' | b')' | b'<' | b'>' | b'@' | b',' | b';' | b':' | b'\\' | b'"' | b'/' | b'[' | b']' | b'?' | b'='
+            )
+    }
+
+    strip_many(input, |c| is_token(*c))
+}
+
 fn strip_dot_atom(input: &[u8]) -> Option<&[u8]> {
     let mut s = strip_atext(input)?;
     while let Some(snext) = s.strip_prefix(b".").and_then(strip_atext) {
@@ -257,6 +281,10 @@ fn strip_atext(input: &[u8]) -> Option<&[u8]> {
             )
             || !c.is_ascii()
     })
+}
+
+pub fn is_quoted_string(s: &str) -> bool {
+    matches!(strip_quoted_string(s.as_bytes()), Some(s) if s.is_empty())
 }
 
 // quoted-string = DQUOTE *([FWS] qcontent) [FWS] DQUOTE
@@ -501,6 +529,40 @@ fn is_vchar(c: &u8) -> bool {
 pub fn strip_suffix<'a>(s: &'a [u8], suffix: &[u8]) -> &'a [u8] {
     debug_assert!(s.ends_with(suffix));
     &s[..(s.len() - suffix.len())]
+}
+
+/// Decodes the given quoted string and returns its (semantic) content. The
+/// input must be a valid quoted string.
+pub fn decode_quoted_string(s: &str) -> String {
+    debug_assert!(is_quoted_string(s));
+
+    // Strip surrounding double quotes.
+    let s = &s[1..(s.len() - 1)];
+
+    let mut result = String::with_capacity(s.len());
+
+    // Copy the string into the result, but
+    // - remove CRLF (which is always part of FWS); and
+    // - replace quoted-pair with the quoted character.
+    let mut escape = false;
+    for c in s.chars() {
+        if escape {
+            escape = false;
+            result.push(c);
+        } else if c == '\\' {
+            escape = true;
+        } else if !is_crlf(c) {
+            result.push(c);
+        }
+    }
+
+    result
+}
+
+fn is_crlf(c: char) -> bool {
+    // In the milter library, line breaks in the header field value are
+    // represented as LF, not CRLF.
+    c == '\n'
 }
 
 #[cfg(test)]

@@ -35,7 +35,7 @@ impl Verifier {
         let vconfig = assemble_verification_config(ip, recipients, config);
 
         let allow_expired = vconfig.allow_expired;
-        let min_key_bits = vconfig.min_key_bits;
+        let min_key_bits = vconfig.min_rsa_key_bits;
         let allow_sha1 = vconfig.allow_sha1;
 
         let config = verifier::Config {

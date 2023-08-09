@@ -6,7 +6,9 @@ dkim-milter \- milter for DKIM signing and verification
 .OP \-c path
 .OP \-L level
 .OP \-l target
+.OP \-n
 .OP \-p socket
+.OP \-s name
 .YS
 .SH DESCRIPTION
 .B dkim-milter
@@ -28,6 +30,9 @@ for the reference documentation.
 If this option is not used, configuration parameters are read from the default
 configuration file
 .IR /etc/dkim-milter/dkim-milter.conf .
+.TP
+.BR \-n ", " \-\-dry-run
+Process messages normally, but do not take action or apply modifications.
 .TP
 .BR \-h ", " \-\-help
 Print usage information.
@@ -59,6 +64,9 @@ The
 .I socket
 value is a socket specification string describing the socket that the milter
 should open for the connection from the MTA.
+.TP
+.BR \-s ", " \-\-syslog-facility " \fIname\fR"
+Facility to use for syslog messages.
 .TP
 .BR \-V ", " \-\-version
 Print version information.

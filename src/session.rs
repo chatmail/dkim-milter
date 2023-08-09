@@ -1,4 +1,5 @@
 use crate::{
+    auth_results,
     config::{
         model::{OperationMode, PartialSigningConfig, SigningSenders},
         Config, SessionConfig,
@@ -8,9 +9,9 @@ use crate::{
     verify::Verifier,
 };
 use bstr::ByteSlice;
-use indymilter::{ContextActions, SetErrorReply, Status};
+use indymilter::{ActionError, ContextActions, SetErrorReply, Status};
 use log::{debug, info};
-use std::{borrow::Cow, error::Error, mem, net::IpAddr, sync::Arc};
+use std::{borrow::Cow, error::Error, ffi::CString, mem, net::IpAddr, sync::Arc};
 use viadkim::{
     crypto::SigningKey,
     header::{self, FieldBody, FieldName, HeaderFields},
@@ -53,6 +54,8 @@ struct MessageData {
     header_bytes: usize,
     sender_address: Option<Result<EmailAddr, FromAddrError>>,
     from_addresses: Option<Result<Vec<EmailAddr>, FromAddrError>>,
+    auth_results_i: usize,
+    auth_results_deletions: Vec<usize>,
     mode: Mode,
     headers: Vec<(FieldName, FieldBody)>,
 }
@@ -105,11 +108,7 @@ impl Session {
         self.message.as_mut().unwrap().recipients.push(rcpt);
     }
 
-    pub fn abort_message(&mut self) {
-        self.message = None;
-    }
-
-    pub fn handle_header(
+    pub fn process_header(
         &mut self,
         id: &str,
         name: Cow<'_, str>,
@@ -120,6 +119,8 @@ impl Session {
             None => return Err("message context not available".into()),
         };
 
+        let config = &self.session_config.config;
+
         // convert milter newlines to SMTP CRLF
         let value = value.replace("\n", "\r\n");
 
@@ -127,9 +128,7 @@ impl Session {
         const MAX_HEADER_LEN: usize = 512_000;
 
         // name + ':' + value + CRLF
-        message.header_bytes = message
-            .header_bytes
-            .saturating_add(name.len() + value.len() + 3);
+        message.header_bytes = message.header_bytes.saturating_add(name.len() + value.len() + 3);
         if message.header_bytes > MAX_HEADER_LEN {
             debug!("{id}: too much header data");
             return Err("too much header data".into());
@@ -168,6 +167,29 @@ impl Session {
                         message.from_addresses = Some(Err(FromAddrError::Syntax));
                     }
                 }
+            }
+        }
+
+        // look for incoming forged Authentication-Results
+        if config.delete_incoming_authentication_results
+            && name.eq_ignore_ascii_case("Authentication-Results")
+        {
+            message.auth_results_i += 1;
+
+            if let Some(incoming_aid) = auth_results::extract_authserv_id(&value) {
+                let aid = authserv_id(config, self.conn.hostname());
+                if eq_authserv_ids(aid, &incoming_aid) {
+                    debug!(
+                        "{id}: recognized own authserv-id in incoming Authentication-Results header instance {}",
+                        message.auth_results_i
+                    );
+                    message.auth_results_deletions.push(message.auth_results_i);
+                }
+            } else {
+                debug!(
+                    "{id}: failed to parse incoming Authentication-Results header instance {}",
+                    message.auth_results_i
+                );
             }
         }
 
@@ -242,7 +264,7 @@ impl Session {
                     debug!("{id}: entered verifying mode");
 
                     let ip = self.conn.ip;
-                    // TODO ?? why clone needed
+                    // TODO delete `.clone()` once repaired version of viadkim published
                     let recipients = self.message.as_ref().unwrap().recipients.clone();
 
                     let verifier = Verifier::init(&self.session_config, headers, ip, &recipients).await;
@@ -261,7 +283,7 @@ impl Session {
                     debug!("{id}: entered verifying mode");
 
                     let ip = self.conn.ip;
-                    // TODO ?? why clone needed
+                    // TODO delete `.clone()` once repaired version of viadkim published
                     let recipients = self.message.as_ref().unwrap().recipients.clone();
 
                     let verifier = Verifier::init(&self.session_config, headers, ip, &recipients).await;
@@ -304,7 +326,8 @@ impl Session {
         let config = &self.session_config.config;
 
         if config.delete_incoming_authentication_results {
-            // TODO delete them
+            delete_auth_results_headers(actions, config, id, message.auth_results_deletions)
+                .await?;
         }
 
         match message.mode {
@@ -323,6 +346,23 @@ impl Session {
             }
         }
     }
+
+    pub fn abort_message(&mut self) {
+        self.message = None;
+    }
+}
+
+// TODO copied from SPF Milter
+fn eq_authserv_ids(id1: &str, id2: &str) -> bool {
+    fn to_unicode(s: &str) -> String {
+        let (result, e) = idna::domain_to_unicode(s);
+        if e.is_err() {
+            debug!("validation error while converting domain \"{s}\" to Unicode");
+        }
+        result
+    }
+
+    to_unicode(id1) == to_unicode(id2)
 }
 
 fn is_trusted_sender(id: &str, config: &Config, ip: Option<IpAddr>, authenticated: bool) -> bool {
@@ -436,6 +476,30 @@ fn find_matching_senders(
     }
 
     matches
+}
+
+async fn delete_auth_results_headers(
+    actions: &impl ContextActions,
+    config: &Config,
+    id: &str,
+    deletions: Vec<usize>,
+) -> Result<(), ActionError> {
+    // Delete headers in reverse: each deletion shifts the header indices after
+    // it, so only reverse iteration selects the correct headers.
+    for i in deletions.into_iter().rev() {
+        if config.dry_run {
+            debug!(
+                "{id}: deleting incoming Authentication-Results header instance {i} [dry run, not done]",
+            );
+        } else {
+            debug!("{id}: deleting incoming Authentication-Results header instance {i}");
+            actions
+                .change_header("Authentication-Results", i as _, None::<CString>)
+                .await?;
+        }
+    }
+
+    Ok(())
 }
 
 // TODO

@@ -105,6 +105,7 @@ Options:
   -l, --log-destination <target>    Destination for log messages
   -L, --log-level <level>           Minimum severity of messages to log
   -p, --socket <socket>             Listening socket of the milter
+  -s, --syslog-facility <name>      Facility to use for syslog messages
   -V, --version                     Print version information
 ";
 
@@ -157,6 +158,13 @@ fn parse_args() -> Result<CliOptions, Box<dyn Error>> {
                     .map_err(|_| format!("invalid value for socket: \"{arg}\""))?;
 
                 opts.socket = Some(socket);
+            }
+            "-s" | "--syslog-facility" => {
+                let arg = args.next().ok_or_else(missing_value)??;
+                let level = arg.parse()
+                    .map_err(|_| format!("invalid value for syslog facility: \"{arg}\""))?;
+
+                opts.syslog_facility = Some(level);
             }
             arg => return Err(format!("unrecognized option: \"{arg}\"").into()),
         }

@@ -9,6 +9,7 @@ use std::{
     sync::Arc,
     time::Duration,
 };
+use syslog::Facility;
 use viadkim::{
     crypto::{HashAlgorithm, SigningKey},
     header::{FieldName, HeaderFieldError},
@@ -79,6 +80,101 @@ impl FromStr for LogLevel {
             "info" => Ok(Self::Info),
             "debug" => Ok(Self::Debug),
             _ => Err(ParseLogLevelError),
+        }
+    }
+}
+
+/// An error indicating that a syslog facility could not be parsed.
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
+pub struct ParseSyslogFacilityError;
+
+impl Error for ParseSyslogFacilityError {}
+
+impl Display for ParseSyslogFacilityError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "failed to parse syslog facility")
+    }
+}
+
+/// The syslog facility.
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
+pub enum SyslogFacility {
+    Auth,
+    Authpriv,
+    Cron,
+    Daemon,
+    Ftp,
+    Kern,
+    Local0,
+    Local1,
+    Local2,
+    Local3,
+    Local4,
+    Local5,
+    Local6,
+    Local7,
+    Lpr,
+    #[default]
+    Mail,
+    News,
+    Syslog,
+    User,
+    Uucp,
+}
+
+impl FromStr for SyslogFacility {
+    type Err = ParseSyslogFacilityError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "auth" => Ok(Self::Auth),
+            "authpriv" => Ok(Self::Authpriv),
+            "cron" => Ok(Self::Cron),
+            "daemon" => Ok(Self::Daemon),
+            "ftp" => Ok(Self::Ftp),
+            "kern" => Ok(Self::Kern),
+            "local0" => Ok(Self::Local0),
+            "local1" => Ok(Self::Local1),
+            "local2" => Ok(Self::Local2),
+            "local3" => Ok(Self::Local3),
+            "local4" => Ok(Self::Local4),
+            "local5" => Ok(Self::Local5),
+            "local6" => Ok(Self::Local6),
+            "local7" => Ok(Self::Local7),
+            "lpr" => Ok(Self::Lpr),
+            "mail" => Ok(Self::Mail),
+            "news" => Ok(Self::News),
+            "syslog" => Ok(Self::Syslog),
+            "user" => Ok(Self::User),
+            "uucp" => Ok(Self::Uucp),
+            _ => Err(ParseSyslogFacilityError),
+        }
+    }
+}
+
+impl From<SyslogFacility> for Facility {
+    fn from(syslog_facility: SyslogFacility) -> Self {
+        match syslog_facility {
+            SyslogFacility::Auth => Self::LOG_AUTH,
+            SyslogFacility::Authpriv => Self::LOG_AUTHPRIV,
+            SyslogFacility::Cron => Self::LOG_CRON,
+            SyslogFacility::Daemon => Self::LOG_DAEMON,
+            SyslogFacility::Ftp => Self::LOG_FTP,
+            SyslogFacility::Kern => Self::LOG_KERN,
+            SyslogFacility::Local0 => Self::LOG_LOCAL0,
+            SyslogFacility::Local1 => Self::LOG_LOCAL1,
+            SyslogFacility::Local2 => Self::LOG_LOCAL2,
+            SyslogFacility::Local3 => Self::LOG_LOCAL3,
+            SyslogFacility::Local4 => Self::LOG_LOCAL4,
+            SyslogFacility::Local5 => Self::LOG_LOCAL5,
+            SyslogFacility::Local6 => Self::LOG_LOCAL6,
+            SyslogFacility::Local7 => Self::LOG_LOCAL7,
+            SyslogFacility::Lpr => Self::LOG_LPR,
+            SyslogFacility::Mail => Self::LOG_MAIL,
+            SyslogFacility::News => Self::LOG_NEWS,
+            SyslogFacility::Syslog => Self::LOG_SYSLOG,
+            SyslogFacility::User => Self::LOG_USER,
+            SyslogFacility::Uucp => Self::LOG_UUCP,
         }
     }
 }
@@ -459,7 +555,7 @@ pub struct SenderEntry {
 pub struct VerificationConfig {
     pub allow_expired: bool,
     pub allow_sha1: bool,
-    pub min_key_bits: usize,
+    pub min_rsa_key_bits: usize,
     pub reject_failures: RejectFailures,
 }
 
@@ -473,8 +569,8 @@ impl VerificationConfig {
         if let Some(allow_sha1) = overrides.allow_sha1 {
             config.allow_sha1 = allow_sha1;
         }
-        if let Some(min_key_bits) = overrides.min_key_bits {
-            config.min_key_bits = min_key_bits;
+        if let Some(min_rsa_key_bits) = overrides.min_rsa_key_bits {
+            config.min_rsa_key_bits = min_rsa_key_bits;
         }
         if let Some(reject_failures) = &overrides.reject_failures {
             config.reject_failures = reject_failures.clone();
@@ -488,7 +584,7 @@ impl Default for VerificationConfig {
         Self {
             allow_expired: false,
             allow_sha1: false,
-            min_key_bits: 1024,
+            min_rsa_key_bits: 1024,
             reject_failures: Default::default(),
         }
     }
@@ -498,7 +594,7 @@ impl Default for VerificationConfig {
 pub struct PartialVerificationConfig {
     pub allow_expired: Option<bool>,
     pub allow_sha1: Option<bool>,
-    pub min_key_bits: Option<usize>,
+    pub min_rsa_key_bits: Option<usize>,
     pub reject_failures: Option<RejectFailures>,
 }
 
@@ -511,8 +607,8 @@ impl PartialVerificationConfig {
         if let Some(allow_sha1) = self.allow_sha1 {
             config.allow_sha1 = allow_sha1;
         }
-        if let Some(min_key_bits) = self.min_key_bits {
-            config.min_key_bits = min_key_bits;
+        if let Some(min_rsa_key_bits) = self.min_rsa_key_bits {
+            config.min_rsa_key_bits = min_rsa_key_bits;
         }
         if let Some(reject_failures) = self.reject_failures {
             config.reject_failures = reject_failures;

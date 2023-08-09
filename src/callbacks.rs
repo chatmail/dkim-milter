@@ -151,7 +151,7 @@ async fn handle_header(context: &mut Context<Session>, name: CString, value: CSt
     let name = name.to_string_lossy();
     let value = value.into_bytes();
 
-    match session.handle_header(&id, name, value) {
+    match session.process_header(&id, name, value) {
         Ok(status) => status,
         Err(e) => {
             error!("{id}: failed to handle header callback: {e}");

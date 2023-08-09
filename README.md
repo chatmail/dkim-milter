@@ -16,10 +16,11 @@ with a milter-capable MTA (mail server) such as [Postfix]. DKIM is specified in
 [RFC 6376].
 
 DKIM milter is based on the [viadkim] library. Therefore, it inherits the
-approach to DKIM used in that library. For example, it is lenient with regard to
-encoding problems actually occurring in header values: a header value containing
-invalid UTF-8 bytes is not a problem, but processed transparently as a byte
-string, etc.
+approach to DKIM used in that library. For example, it fully supports
+internationalised email; it is lenient with regard to encoding problems actually
+occurring in header values such as invalid UTF-8; it does queries for DKIM
+public keys in parallel; it skips unnecessary message body processing; and so
+on.
 
 DKIM Milter can be used as a simple alternative to the OpenDKIM milter. Credit
 goes to that project, of which I have been a long-time user and which has

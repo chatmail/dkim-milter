@@ -11,8 +11,9 @@ use crate::{
     config::{
         format::{ParseConfigError, ValidationError},
         model::{
-            LogDestination, LogLevel, OperationMode, SigningConfig, OverrideEntries,
-            SigningSenders, Socket, TrustedNetworks, VerificationConfig, OverrideNetworkEntry,
+            LogDestination, LogLevel, OperationMode, OverrideEntries, OverrideNetworkEntry,
+            SigningConfig, SigningSenders, Socket, SyslogFacility, TrustedNetworks,
+            VerificationConfig,
         },
     },
     resolver::{DomainResolver, Resolver},
@@ -42,6 +43,7 @@ pub struct CliOptions {
     pub log_destination: Option<LogDestination>,
     pub log_level: Option<LogLevel>,
     pub socket: Option<Socket>,
+    pub syslog_facility: Option<SyslogFacility>,
 }
 
 pub struct SessionConfig {
@@ -123,6 +125,7 @@ impl From<ValidationError> for ConfigErrorKind {
 pub struct LogConfig {
     pub log_destination: LogDestination,
     pub log_level: LogLevel,
+    pub syslog_facility: SyslogFacility,
 }
 
 // preliminary, loose reading of LogConfig only

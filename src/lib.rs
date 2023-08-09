@@ -145,7 +145,7 @@ fn configure_logging(config: &LogConfig) -> Result<(), Box<dyn Error + 'static>>
 
     match config.log_destination {
         LogDestination::Syslog => {
-            syslog::init_unix(syslog::Facility::LOG_MAIL, level)
+            syslog::init_unix(config.syslog_facility.into(), level)
                 .map_err(|e| {
                     io::Error::new(
                         ErrorKind::Other,
