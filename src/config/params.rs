@@ -51,8 +51,6 @@ pub fn parse_trusted_networks(s: &str) -> Result<TrustedNetworks, ParseParamErro
     Ok(trusted_networks)
 }
 
-// TODO header handling inefficient, revise
-
 pub fn parse_signed_headers(s: &str) -> Result<SignedHeaders, ParseParamError> {
     if let Some(rest) = s.strip_prefix("default") {
         if rest.is_empty() {
@@ -68,21 +66,21 @@ pub fn parse_signed_headers(s: &str) -> Result<SignedHeaders, ParseParamError> {
 
             return Ok(SignedHeaders::PickWithDefault(result));
         }
-    } else if let Some(rest) = s.strip_prefix("all") {
+    }
+
+    if let Some(rest) = s.strip_prefix("all") {
         if rest.is_empty() {
             return Ok(SignedHeaders::All);
         }
-    } else {
-        let result = parse_field_names(s)?;
-
-        if !result.iter().any(|n| *n.as_ref() == "From") {
-            return Err(ParseParamError::SignedHeadersMissingFrom(s.into()));
-        }
-
-        return Ok(SignedHeaders::Pick(result));
     }
 
-    Err(ParseParamError::InvalidSignedHeaders(s.into()))
+    let result = parse_field_names(s)?;
+
+    if !result.iter().any(|n| *n.as_ref() == "From") {
+        return Err(ParseParamError::SignedHeadersMissingFrom(s.into()));
+    }
+
+    Ok(SignedHeaders::Pick(result))
 }
 
 pub fn parse_oversigned_headers(s: &str) -> Result<OversignedHeaders, ParseParamError> {
@@ -90,16 +88,17 @@ pub fn parse_oversigned_headers(s: &str) -> Result<OversignedHeaders, ParseParam
         if rest.is_empty() {
             return Ok(OversignedHeaders::Signed);
         }
-    } else if let Some(rest) = s.strip_prefix("exhaustive") {
+    }
+
+    if let Some(rest) = s.strip_prefix("exhaustive") {
         if rest.is_empty() {
             return Ok(OversignedHeaders::Exhaustive);
         }
-    } else {
-        let result = parse_field_names(s)?;
-        return Ok(OversignedHeaders::Pick(result));
     }
 
-    Err(ParseParamError::InvalidSignedHeaders(s.into()))
+    let result = parse_field_names(s)?;
+
+    Ok(OversignedHeaders::Pick(result))
 }
 
 pub fn parse_default_signed_headers(v: &str) -> Result<Vec<SignedFieldName>, ParseParamError> {
@@ -127,6 +126,10 @@ fn parse_field_names(s: &str) -> Result<Vec<SignedFieldName>, ParseParamError> {
 
     let mut seen: HashSet<SignedFieldName> = HashSet::new();
 
+    // A trailing colon is allowed for disambiguation. For example, if someone
+    // configures `oversigned_headers = signed`, `signed` is a special token; if
+    // someone configures `oversigned_headers = signed:`, `signed` is a literal
+    // header name.
     for s in split_at_colon(s) {
         let s = s?;
         let name = SignedFieldName::new(s)
@@ -164,6 +167,7 @@ pub fn parse_expiration(s: &str) -> Result<Expiration, ParseParamError> {
     Ok(Expiration::After(duration))
 }
 
+// TODO don't use saturating but checked?
 fn parse_expiration_duration(s: &str) -> Result<Duration, ParseIntError> {
     let seconds = if let Some(s) = s.strip_suffix('d') {
         let days = NonZeroU32::from_str(s.trim_end())?;
@@ -203,18 +207,38 @@ pub fn parse_reject_failures(s: &str) -> Result<RejectFailures, ParseParamError>
 
 // colon cannot appear in field names, so is a good choice for the separator
 fn split_at_colon(value: &str) -> impl Iterator<Item = Result<&str, ParseParamError>> {
-    split_separator(value, ':')
+    split_terminator(value, ':')
 }
 
 fn split_at_comma(value: &str) -> impl Iterator<Item = Result<&str, ParseParamError>> {
     split_separator(value, ',')
 }
 
-// TODO wip, copied from spf-milter
 fn split_separator(value: &str, sep: char) -> impl Iterator<Item = Result<&str, ParseParamError>> {
     let value = value.trim();
 
     let mut values = value.split(sep);
+
+    // If the value is empty, `split` will yield one empty string slice. In that
+    // case, drop this string so that the iterator becomes empty.
+    if value.is_empty() {
+        values.next();
+    }
+
+    values.map(|s| {
+        let s = s.trim();
+        if s.is_empty() {
+            Err(ParseParamError::InvalidValue)
+        } else {
+            Ok(s)
+        }
+    })
+}
+
+fn split_terminator(value: &str, sep: char) -> impl Iterator<Item = Result<&str, ParseParamError>> {
+    let value = value.trim();
+
+    let mut values = value.split_terminator(sep);
 
     // If the value is empty, `split` will yield one empty string slice. In that
     // case, drop this string so that the iterator becomes empty.
@@ -238,11 +262,50 @@ mod tests {
 
     #[test]
     fn parse_signed_headers_ok() {
-        let signed_headers = parse_signed_headers("default; From:To").unwrap();
+        let headers = parse_signed_headers("default").unwrap();
+        assert_eq!(headers, SignedHeaders::PickWithDefault(vec![]));
 
+        let headers = parse_signed_headers("default;").unwrap();
+        assert_eq!(headers, SignedHeaders::PickWithDefault(vec![]));
+
+        let headers = parse_signed_headers("default; From:").unwrap();
+        assert_eq!(headers, SignedHeaders::PickWithDefault(vec![]));
+
+        let headers = parse_signed_headers("default; From:To").unwrap();
         assert_eq!(
-            signed_headers,
+            headers,
             SignedHeaders::PickWithDefault(vec![SignedFieldName::new("To").unwrap()])
         );
+
+        let headers = parse_signed_headers("From:").unwrap();
+        assert_eq!(
+            headers,
+            SignedHeaders::Pick(vec![SignedFieldName::new("From").unwrap()])
+        );
+
+        assert!(parse_signed_headers("default:").is_err());
+    }
+
+    #[test]
+    fn parse_oversigned_headers_ok() {
+        let headers = parse_oversigned_headers("signed").unwrap();
+        assert_eq!(headers, OversignedHeaders::Signed);
+
+        let headers = parse_oversigned_headers("signed:").unwrap();
+        assert_eq!(
+            headers,
+            OversignedHeaders::Pick(vec![SignedFieldName::new("signed").unwrap()])
+        );
+
+        let headers = parse_oversigned_headers("signed:X").unwrap();
+        assert_eq!(
+            headers,
+            OversignedHeaders::Pick(vec![
+                SignedFieldName::new("signed").unwrap(),
+                SignedFieldName::new("X").unwrap()
+            ])
+        );
+
+        assert!(parse_oversigned_headers("signed::").is_err());
     }
 }

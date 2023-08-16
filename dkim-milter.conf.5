@@ -109,10 +109,10 @@ Whether to record the headers seen in the original message in the
 tag.
 .TP
 .BR default_signed_headers " (\fIcolon-separated\fR)"
-To do.
+The default set of signed headers.
 .TP
 .BR default_unsigned_headers " (\fIcolon-separated\fR)"
-To do.
+The default set of headers to exclude from being signed.
 .TP
 .BR expire_after " (\fIduration\fR)"
 The validity period to declare in the
@@ -133,8 +133,18 @@ Whether to record the length of the signed message content in the
 .I l=
 tag.
 .TP
-.BR oversigned_headers " (\fIcolon-separated\fR)"
+.BR oversigned_headers " (\fIoversigned-headers\fR)"
 Headers to oversign, that is, sign once more than actually present and signed.
+The given value may be in one of the following formats:
+.BR signed ,
+oversign all headers already selected for signing.
+.BR exhaustive ,
+oversign all headers in
+.BR default_signed_headers ,
+even if they are not present in the message header and so were not selected for
+signing.
+.IR colon-separated ,
+the listed colon-separated headers.
 .TP
 .BR request_reports " (\fIboolean\fR)"
 Whether to include the extension tag
@@ -151,7 +161,7 @@ colon-separated headers to include.
 .BR all ,
 all headers present, minus the set of excluded headers.
 .IR colon-separated ,
-the listed headers.
+the listed colon-separated headers.
 .IP
 When a signature is prepared, the headers specified here are selected from the
 message’s header in order from the bottom up, that is, in evaluation order.

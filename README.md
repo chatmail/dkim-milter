@@ -15,7 +15,7 @@ the *DomainKeys Identified Mail* (DKIM) protocol. It is meant to be integrated
 with a milter-capable MTA (mail server) such as [Postfix]. DKIM is specified in
 [RFC 6376].
 
-DKIM milter is based on the [viadkim] library. Therefore, it inherits the
+DKIM Milter is based on the [viadkim] library. Therefore, it inherits the
 approach to DKIM used in that library. For example, it fully supports
 internationalised email; it is lenient with regard to encoding problems actually
 occurring in header values such as invalid UTF-8; it does queries for DKIM

@@ -4,7 +4,7 @@ use crate::{
         model::{OperationMode, PartialSigningConfig, SigningSenders},
         Config, SessionConfig,
     },
-    format::{self, EmailAddr},
+    format::{self, MailAddr},
     sign::Signer,
     verify::Verifier,
 };
@@ -26,7 +26,7 @@ enum Mode {
     Verifying(Verifier),
 }
 
-pub enum FromAddrError {
+pub enum SenderAddrError {
     Syntax,
     Multiple,
 }
@@ -52,8 +52,8 @@ struct MessageData {
     auth: bool,
     recipients: Vec<String>,
     header_bytes: usize,
-    sender_address: Option<Result<EmailAddr, FromAddrError>>,
-    from_addresses: Option<Result<Vec<EmailAddr>, FromAddrError>>,
+    sender_address: Option<Result<MailAddr, SenderAddrError>>,
+    from_addresses: Option<Result<Vec<MailAddr>, SenderAddrError>>,
     auth_results_i: usize,
     auth_results_deletions: Vec<usize>,
     mode: Mode,
@@ -138,15 +138,15 @@ impl Session {
         if name.eq_ignore_ascii_case("Sender") {
             if message.sender_address.is_some() {
                 debug!("{id}: repeated Sender header field, ignoring Sender");
-                message.sender_address = Some(Err(FromAddrError::Multiple));
+                message.sender_address = Some(Err(SenderAddrError::Multiple));
             } else {
-                match format::parse_header_sender_address(&value) {
+                match format::parse_sender_address(&value) {
                     Ok(addr) => {
                         message.sender_address = Some(Ok(addr));
                     }
                     Err(e) => {
                         debug!("{id}: unusable Sender header field: {e}");
-                        message.sender_address = Some(Err(FromAddrError::Syntax));
+                        message.sender_address = Some(Err(SenderAddrError::Syntax));
                     }
                 }
             }
@@ -156,15 +156,15 @@ impl Session {
         if name.eq_ignore_ascii_case("From") {
             if message.from_addresses.is_some() {
                 debug!("{id}: repeated From header field, ignoring From");
-                message.from_addresses = Some(Err(FromAddrError::Multiple));
+                message.from_addresses = Some(Err(SenderAddrError::Multiple));
             } else {
-                match format::parse_header_from_addresses(&value) {
+                match format::parse_from_addresses(&value) {
                     Ok(addr) => {
                         message.from_addresses = Some(Ok(addr));
                     }
                     Err(e) => {
                         debug!("{id}: unusable From header field: {e}");
-                        message.from_addresses = Some(Err(FromAddrError::Syntax));
+                        message.from_addresses = Some(Err(SenderAddrError::Syntax));
                     }
                 }
             }
@@ -402,9 +402,9 @@ fn is_trusted_sender(id: &str, config: &Config, ip: Option<IpAddr>, authenticate
 // message to identify the address being used to sign the message.’
 fn extract_sender<'a>(
     id: &str,
-    sender_address: Option<&'a Result<EmailAddr, FromAddrError>>,
-    from_addresses: Option<&'a Result<Vec<EmailAddr>, FromAddrError>>,
-) -> Option<&'a EmailAddr> {
+    sender_address: Option<&'a Result<MailAddr, SenderAddrError>>,
+    from_addresses: Option<&'a Result<Vec<MailAddr>, SenderAddrError>>,
+) -> Option<&'a MailAddr> {
     match sender_address {
         Some(Ok(addr)) => {
             debug!("{id}: using originator in Sender header: {addr}");
@@ -453,9 +453,9 @@ pub struct SenderMatch {
 
 fn find_matching_senders(
     signing_senders: &SigningSenders,
-    sender: &EmailAddr,
+    sender: &MailAddr,
 ) -> Vec<SenderMatch> {
-    let EmailAddr { local_part, domain } = sender;
+    let MailAddr { local_part, domain } = sender;
 
     // TODO
 
@@ -528,7 +528,7 @@ mod tests {
             ],
         };
 
-        let from_address = EmailAddr::new("itsame@mail.example.com").unwrap();
+        let from_address = MailAddr::new("itsame@mail.example.com").unwrap();
 
         let matches = find_matching_senders(&signing_senders, &from_address);
 

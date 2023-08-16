@@ -70,7 +70,6 @@ impl Error for ParseConfigError {
             | InvalidU32(_)
             | InvalidNetworkAddress(_)
             | InvalidTrustedNetworks(_)
-            | InvalidSignedHeaders(_)
             | InvalidFieldName(_)
             | SignedHeadersMissingFrom(_)
             | FromInUnsignedHeaders(_)
@@ -106,7 +105,6 @@ impl Display for ParseConfigError {
             | InvalidU32(_)
             | InvalidNetworkAddress(_)
             | InvalidTrustedNetworks(_)
-            | InvalidSignedHeaders(_)
             | InvalidFieldName(_)
             | SignedHeadersMissingFrom(_)
             | FromInUnsignedHeaders(_)
@@ -140,7 +138,6 @@ pub enum ParseParamError {
     InvalidU32(String),
     InvalidNetworkAddress(String),
     InvalidTrustedNetworks(String),
-    InvalidSignedHeaders(String),
     InvalidFieldName(String),
     SignedHeadersMissingFrom(String),
     FromInUnsignedHeaders(String),
@@ -176,7 +173,6 @@ impl Display for ParseParamError {
             Self::InvalidU32(s) => write!(f, "invalid integer value \"{s}\""),
             Self::InvalidNetworkAddress(s) => write!(f, "invalid network address \"{s}\""),
             Self::InvalidTrustedNetworks(s) => write!(f, "invalid trusted networks \"{s}\""),
-            Self::InvalidSignedHeaders(s) => write!(f, "invalid signed headers \"{s}\""),
             Self::InvalidFieldName(s) => write!(f, "invalid header field name \"{s}\""),
             Self::SignedHeadersMissingFrom(_s) => write!(f, "signed headers are missing required header From"),
             Self::FromInUnsignedHeaders(_s) => write!(f, "unsigned headers contain required header From"),
@@ -536,6 +532,7 @@ async fn parse_raw_config(file_content: &str) -> Result<RawConfig, ConfigErrorKi
                 config.trusted_networks = Some(value);
             }
             "authserv_id" => {
+                // TODO validate authserv-id ?
                 config.authserv_id = Some(v.to_owned());
             }
             "mode" => {

@@ -4,13 +4,13 @@ use crate::{
         model::{RejectFailure, VerificationConfig},
         Config, SessionConfig,
     },
-    format::EmailAddr,
+    format::MailAddr,
     resolver::Resolver,
-    session::FromAddrError,
+    session::SenderAddrError,
 };
 use indymilter::{ContextActions, SetErrorReply, Status};
 use log::{debug, info};
-use std::{cmp, error::Error, net::IpAddr};
+use std::{error::Error, net::IpAddr};
 use viadkim::{
     header::HeaderFields,
     message_hash::BodyHasherStance,
@@ -76,7 +76,7 @@ impl Verifier {
         id: &str,
         config: &Config,
         authserv_id: &str,
-        from_addresses: Option<&Result<Vec<EmailAddr>, FromAddrError>>,
+        from_addresses: Option<&Result<Vec<MailAddr>, SenderAddrError>>,
         reply: &mut impl SetErrorReply,
         actions: &impl ContextActions,
     ) -> Result<Status, Box<dyn Error>> {
@@ -100,7 +100,7 @@ impl Verifier {
 
         for sig in &sigs {
             // first, update sig status
-            let is_testing = sig.key_record.as_ref().map_or(false, |r| r.is_testing_mode());
+            let is_testing = matches!(&sig.key_record, Some(r) if r.is_testing_mode());
 
             // DKIM key records in testing mode are treated as passing!
 
@@ -279,31 +279,162 @@ pub fn get_domain_from_verification_result(res: &VerificationResult) -> String {
     }
 }
 
-pub fn get_signature_prefix_from_verification_result(res: &VerificationResult) -> Option<String> {
-    // TODO use minimal unique prefix instead of [..8]
-    match &res.signature {
-        Some(sig) => {
-            let s = viadkim::encode_base64(&sig.signature_data);
-            let s = &s[..(cmp::min(8, s.len()))];
-            Some(s.into())
-        }
-        None => {
-            if let VerificationStatus::Failure(VerificationError::DkimSignatureFormat(e)) =
-                &res.status
-            {
-                if let Some(s) = &e.signature_data {
-                    let s = &s[..(cmp::min(8, s.len()))];
-                    return Some(s.into());
-                }
-            }
-            None
+// Signature prefixes recorded in header.b are specified in RFC 6008. The RFC
+// does not say much about edge cases (of which there is an abundance). The
+// returned signature prefixes may not be unique. For example, if two b= tags
+// have identical values (this happens in practice due to clueless
+// administrators) there is no unique prefix, they will remain identical.
+pub fn compute_signature_prefixes(sigs: &[VerificationResult]) -> Vec<Option<String>> {
+    let sigs: Vec<_> = sigs
+        .iter()
+        .map(|sig| (sig.index, make_b_string(sig)))
+        .collect();
+
+    compute_signature_prefixes_internal(&sigs, 8)
+}
+
+fn make_b_string(r: &VerificationResult) -> Option<String> {
+    // If proper DKIM signature data is available, re-encode the signature bytes
+    // to the original Base64 string.
+    if let Some(sig) = &r.signature {
+        return Some(viadkim::encode_base64(&sig.signature_data));
+    }
+
+    // Else try to use whatever was salvaged as a string from the b= tag.
+    // Careful, this could be any (malicious) thing.
+    if let VerificationStatus::Failure(VerificationError::DkimSignatureFormat(e)) = &r.status {
+        if let Some(s) = &e.signature_data {
+            return Some(s.as_ref().into());
         }
     }
+
+    None
+}
+
+// Design note: The purpose of the header.b prefix is identifying a signature
+// unambiguously. However, some values cannot be disambiguated clearly. For
+// example, when value "abcdefgh" is a prefix of value "abcdefghijk", then the
+// first value by itself is ambiguous. In such cases we have decided to make the
+// longer value one character longer, "abcdefghi". Consumers of the prefixes
+// could then select unambiguously by picking the longer prefixes first.
+
+fn compute_signature_prefixes_internal(
+    sigs: &[(usize, Option<String>)],
+    min_len: usize,
+) -> Vec<Option<String>> {
+    assert!(min_len > 0);
+
+    let mut result = Vec::with_capacity(sigs.len());
+
+    // This is surprisingly complicated. This algorithm is quadratic, for now
+    // this is acceptable because there is only a limited number of results and
+    // no expensive computation happening.
+
+    for (this_index, this_str) in sigs {
+        let this_str = match this_str.as_deref() {
+            Some(s) => s,
+            None => {
+                // This verification result does not have a b= string.
+                result.push(None);
+                continue;
+            }
+        };
+
+        let mut this_indices = this_str.char_indices();
+
+        // `i` is the byte offset of the char *after* min_len chars.
+        let (i, mut this_c) = match this_indices.nth(min_len) {
+            Some(x) => x,
+            None => {
+                // If the b= string is only of minimum size, use it entirely.
+                result.push(Some(this_str.into()));
+                continue;
+            }
+        };
+
+        // This is the initial minimum prefix if the b= string has > min_len
+        // chars. It is min_len (8) chars long.
+        let mut this_prefix = &this_str[..i];
+
+        // Step through all *other* signatures and use them to determine final
+        // header.b value of this signature.
+        'others: for (other_index, other_str) in sigs {
+            if other_index == this_index {
+                continue;
+            }
+
+            let other_str = match other_str.as_deref() {
+                Some(s) => s,
+                None => continue,
+            };
+
+            let other_rest = match other_str.strip_prefix(this_prefix) {
+                Some(s) => s,
+                None => {
+                    // The other b= string does not impact prefix computation.
+                    continue;
+                }
+            };
+
+            // The other b= string has the same prefix as this b= string.
+            // Complication! Computation!
+
+            let mut other_rest_indices = other_rest.char_indices();
+
+            let (_, mut other_c) = match other_rest_indices.next() {
+                Some(x) => x,
+                None => {
+                    // The other b= string is equal to the prefix. Disambiguate
+                    // by making the prefix one char longer.
+                    let x = this_indices.next().map_or(this_str.len(), |(n, _)| n);
+                    this_prefix = &this_str[..x];
+                    continue;
+                }
+            };
+
+            // Finally, we can now compare the remainder of the b= strings until
+            // we find a discrepancy.
+
+            while this_c == other_c {
+                match (this_indices.next(), other_rest_indices.next()) {
+                    (None, _) => {
+                        // This b= string is identical to or a prefix of the
+                        // other b= string, disambiguation is not possible. This
+                        // follows OpenDKIM, where the identical strings
+                        // condition was added in a bug fix release with
+                        // comment: ‘In the weird case of duplicate signatures,
+                        // constrain the size of the resulting "header.b"
+                        // value.’
+                        continue 'others;
+                    }
+                    (Some(_), None) => {
+                        // The other b= string was a prefix of our string. Break
+                        // to make this prefix one char longer.
+                        break;
+                    }
+                    (Some((_, this_c_next)), Some((_, other_c_next))) => {
+                        this_c = this_c_next;
+                        other_c = other_c_next;
+                    }
+                }
+            }
+
+            // The b= strings diverged. Make this_prefix one char longer.
+            let x = this_indices.next().map_or(this_str.len(), |(n, _)| n);
+            this_prefix = &this_str[..x];
+        }
+
+        result.push(Some(this_prefix.into()));
+    }
+
+    assert_eq!(result.len(), sigs.len());
+
+    result
 }
 
 fn is_author_matched_domain(
     sig: Option<&DkimSignature>,
-    from_addresses: Option<&Result<Vec<EmailAddr>, FromAddrError>>,
+    from_addresses: Option<&Result<Vec<MailAddr>, SenderAddrError>>,
 ) -> bool {
     let domain = match sig {
         Some(sig) => &sig.domain,
@@ -322,4 +453,45 @@ fn is_author_matched_domain(
     }
 
     false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn compute_signature_prefixes_mixed() {
+        let sigs = [
+            Some("𝔞b𝔠".into()),
+            None,
+            Some("𝔞b𝔠d𝔢".into()),
+            Some("p𝔮r𝔰t𝔲".into()),
+            Some("p𝔮r𝔰T𝔲".into()),
+            Some("p𝔮r𝔰t𝔵y".into()),
+            Some("p𝔮r𝔰t𝔲v𝔴".into()),
+            Some("p𝔮r𝔰".into()),
+            Some("9876543".into()),
+            Some("9876543".into()),
+            Some("123456".into()),
+            Some("12345".into()),
+        ];
+        let sigs: Vec<_> = (0..).zip(sigs).collect();
+
+        let result = compute_signature_prefixes_internal(&sigs, 4);
+
+        assert_eq!(result, [
+            Some("𝔞b𝔠".into()),
+            None,
+            Some("𝔞b𝔠d".into()),
+            Some("p𝔮r𝔰t𝔲".into()),
+            Some("p𝔮r𝔰T".into()),
+            Some("p𝔮r𝔰t𝔵".into()),
+            Some("p𝔮r𝔰t𝔲v".into()),
+            Some("p𝔮r𝔰".into()),
+            Some("9876".into()),
+            Some("9876".into()),
+            Some("123456".into()),
+            Some("1234".into()),
+        ]);
+    }
 }

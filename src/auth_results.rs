@@ -2,6 +2,7 @@ use crate::{format, verify};
 use std::{borrow::Cow, error::Error, fmt::Write, str};
 use viadkim::{
     record::DkimKeyRecordError,
+    signature::{DkimSignature, DkimSignatureError},
     verifier::{DkimAuthResult, VerificationError, VerificationResult, VerificationStatus},
 };
 
@@ -11,12 +12,12 @@ pub fn extract_authserv_id(value: &[u8]) -> Option<Cow<'_, str>> {
     // *authserv-id* is a lexical token of kind `value` as defined in RFC 2045,
     // section 5.1, that is, either a `token` or a quoted string. Immediately
     // before the *authserv-id* there may be a CFWS.
-    let value = format::strip_cfws(value).unwrap_or(value);
+    let value = format::strip_cfws_loose(value).unwrap_or(value);
 
     if let Some(rest) = format::strip_mime_value(value) {
         // Directly after the *authserv-id* may come either a semicolon or
         // another CFWS. Validation proceeds no further than this.
-        if rest.starts_with(b";") || format::strip_cfws(rest).is_some() {
+        if rest.starts_with(b";") || format::strip_cfws_loose(rest).is_some() {
             // We have a match. If it is a quoted string, now it needs to be
             // decoded to be in a form comparable with another *authserv-id*.
             let authserv_id = &value[..(value.len() - rest.len())];
@@ -32,66 +33,71 @@ pub fn extract_authserv_id(value: &[u8]) -> Option<Cow<'_, str>> {
     None
 }
 
-// TODO revisit output format; what would be a good format?
+// TODO revisit output formatting; what would be a good format?
 pub fn assemble_auth_results(authserv_id: &str, sigs: Vec<VerificationResult>) -> String {
     let mut result = String::new();
 
-    write!(result, " {authserv_id}").unwrap();
+    write!(result, " {}", format::encode_mime_value(authserv_id)).unwrap();
 
     if sigs.is_empty() {
         let ar = DkimAuthResult::None;
         write!(result, "; dkim={ar}").unwrap();
     } else {
-        for sig in sigs {
-            result.push_str(";\n\t");
+        let signature_prefixes = verify::compute_signature_prefixes(&sigs);
 
-            let ar = sig.status.to_dkim_auth_result();
-
-            // TODO safely encode all MIME values
-
-            write!(result, "dkim={ar}").unwrap();
-
-            if sig.key_record.as_ref().map_or(false, |r| r.is_testing_mode()) {
-                write!(result, " (test mode)").unwrap();
-            }
-
-            if let Some(reason) = auth_results_reason_from_status(&sig.status) {
-                write!(result, " reason=\"{reason}\"").unwrap();
-            }
-
-            write!(
-                result,
-                " header.d={}",
-                verify::get_domain_from_verification_result(&sig),
-            ).unwrap();
-
-            if let Some(signature) = &sig.signature {
-                if let Some(identity) = &signature.identity {
-                    write!(result, " header.i={identity}").unwrap();
-                }
-            }
-
-            result.push_str("\n\t");
-
-            if let Some(signature) = &sig.signature {
-                write!(result, " header.a={}", signature.algorithm).unwrap();
-            } else if let VerificationStatus::Failure(VerificationError::DkimSignatureFormat(error)) = &sig.status {
-                if let Some(alg) = &error.algorithm {
-                    write!(result, " header.a={alg}").unwrap();
-                }
-            }
-
-            if let Some(signature) = &sig.signature {
-                write!(result, " header.s={}", signature.selector).unwrap();
-            }
-
-            if let Some(s) = verify::get_signature_prefix_from_verification_result(&sig) {
-                write!(result, " header.b={s}").unwrap();
-            }
+        for (sig, prefix) in sigs.into_iter().zip(signature_prefixes) {
+            format_resinfo_into_string(&mut result, sig, prefix);
         }
     }
 
     result
+}
+
+fn format_resinfo_into_string(
+    result: &mut String,
+    sig: VerificationResult,
+    prefix: Option<String>,
+) {
+    let ar = sig.status.to_dkim_auth_result();
+
+    write!(result, ";\n\tdkim={ar}").unwrap();
+
+    if let Some(r) = &sig.key_record {
+        if r.is_testing_mode() {
+            write!(result, " (test mode)").unwrap();
+        }
+    }
+
+    if let Some(reason) = auth_results_reason_from_status(&sig.status) {
+        write!(result, " reason={}", format::encode_mime_value(&reason)).unwrap();
+    }
+
+    // Note that header.d is *always* included, being the main payload of a DKIM
+    // signature. If it is not known, "unknown" is substituted.
+    let domain = verify::get_domain_from_verification_result(&sig);
+    write!(result, " header.d={}", format::encode_mime_value(&domain)).unwrap();
+
+    let (signature, error) = get_signature_or_error_data(&sig);
+
+    format_identity_into_string(result, signature, error);
+
+    // Is there more data to display on an additional line?
+    if signature.is_some()
+        || matches!(error, Some(e) if e.algorithm.is_some() || e.selector.is_some())
+        || prefix.is_some()
+    {
+        result.push_str("\n\t");
+
+        format_algorithm_into_string(result, signature, error);
+
+        format_selector_into_string(result, signature, error);
+
+        // TODO revisit: if an updated viadkim provides the b= string in raw
+        // (whitespace not stripped) format, might need to do a bit more work here
+        if let Some(s) = prefix {
+            write!(result, " header.b={}", format::encode_mime_value(&s)).unwrap();
+        }
+    }
 }
 
 pub fn auth_results_reason_from_status(status: &VerificationStatus) -> Option<String> {
@@ -126,6 +132,65 @@ pub fn auth_results_reason_from_status(status: &VerificationStatus) -> Option<St
                     None => error.to_string(),
                 }),
             }
+        }
+    }
+}
+
+fn get_signature_or_error_data(
+    sig: &VerificationResult,
+) -> (Option<&DkimSignature>, Option<&DkimSignatureError>) {
+    if let Some(signature) = &sig.signature {
+        (Some(signature), None)
+    } else if let VerificationStatus::Failure(VerificationError::DkimSignatureFormat(error)) =
+        &sig.status
+    {
+        (None, Some(error))
+    } else {
+        (None, None)
+    }
+}
+
+fn format_identity_into_string(
+    result: &mut String,
+    signature: Option<&DkimSignature>,
+    error: Option<&DkimSignatureError>,
+) {
+    if let Some(signature) = signature {
+        // TODO display identity properly, see SPF Milter
+        if let Some(identity) = &signature.identity {
+            write!(result, " header.i={}", identity).unwrap();
+        }
+    } else if let Some(error) = error {
+        if let Some(identity) = &error.identity {
+            write!(result, " header.i={}", format::encode_mime_value(identity)).unwrap();
+        }
+    }
+}
+
+fn format_algorithm_into_string(
+    result: &mut String,
+    signature: Option<&DkimSignature>,
+    error: Option<&DkimSignatureError>,
+) {
+    if let Some(signature) = signature {
+        write!(result, " header.a={}", signature.algorithm).unwrap();
+    } else if let Some(error) = error {
+        if let Some(alg) = &error.algorithm {
+            write!(result, " header.a={}", format::encode_mime_value(alg)).unwrap();
+        }
+    }
+}
+
+fn format_selector_into_string(
+    result: &mut String,
+    signature: Option<&DkimSignature>,
+    error: Option<&DkimSignatureError>,
+) {
+    if let Some(signature) = signature {
+        write!(result, " header.s={}", signature.selector).unwrap();
+    } else if let Some(error) = error {
+        if let Some(selector) = &error.selector {
+            write!(result, " header.s={}", format::encode_mime_value(selector)).unwrap();
         }
     }
 }

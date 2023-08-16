@@ -157,7 +157,7 @@ fn find_matching_connection_overrides(
 fn find_matching_recipient_overrides(
     recipient_overrides: &OverrideEntries,
     recipients: &[String],
-    // from_address: &EmailAddr,
+    // from_address: &MailAddr,
 ) -> Option<PartialSigningConfig> {
     for recipient in recipients {
         // TODO ensure is parsable as email addr
