@@ -75,6 +75,7 @@ impl Error for ParseConfigError {
             | FromInUnsignedHeaders(_)
             | InvalidHashAlgorithm(_)
             | InvalidCanonicalization(_)
+            | InvalidDuration(_)
             | InvalidExpiration(_)
             | InvalidRejectFailure(_)
             | InvalidMode(_) => None,
@@ -110,6 +111,7 @@ impl Display for ParseConfigError {
             | FromInUnsignedHeaders(_)
             | InvalidHashAlgorithm(_)
             | InvalidCanonicalization(_)
+            | InvalidDuration(_)
             | InvalidExpiration(_)
             | InvalidRejectFailure(_)
             | InvalidMode(_) => write!(f, ": {}", self.kind),
@@ -143,6 +145,7 @@ pub enum ParseParamError {
     FromInUnsignedHeaders(String),
     InvalidHashAlgorithm(String),
     InvalidCanonicalization(String),
+    InvalidDuration(String),
     InvalidExpiration(String),
     InvalidMode(String),
     InvalidRejectFailure(String),
@@ -178,6 +181,7 @@ impl Display for ParseParamError {
             Self::FromInUnsignedHeaders(_s) => write!(f, "unsigned headers contain required header From"),
             Self::InvalidHashAlgorithm(s) => write!(f, "invalid hash algorithm \"{s}\""),
             Self::InvalidCanonicalization(s) => write!(f, "invalid canonicalization \"{s}\""),
+            Self::InvalidDuration(s) => write!(f, "invalid duration \"{s}\""),
             Self::InvalidExpiration(s) => write!(f, "invalid expiration duration \"{s}\""),
             Self::InvalidMode(s) => write!(f, "invalid operation mode \"{s}\""),
             Self::InvalidRejectFailure(s) => write!(f, "invalid rejection specification \"{s}\""),
@@ -695,19 +699,19 @@ fn parse_signing_config_param(
     match k {
         "default_signed_headers" => {
             let value = params::parse_default_signed_headers(v)?;
-            config.default_signed_headers = Some(value);
+            config.default_signed_headers = Some(value.into());
         }
         "default_unsigned_headers" => {
             let value = params::parse_default_unsigned_headers(v)?;
-            config.default_unsigned_headers = Some(value);
+            config.default_unsigned_headers = Some(value.into());
         }
         "signed_headers" => {
             let value = params::parse_signed_headers(v)?;
-            config.signed_headers = Some(value);
+            config.signed_headers = Some(value.into());
         }
         "oversigned_headers" => {
             let value = params::parse_oversigned_headers(v)?;
-            config.oversigned_headers = Some(value);
+            config.oversigned_headers = Some(value.into());
         }
         "hash_algorithm" => {
             let value = params::parse_hash_algorithm(v)?;
@@ -757,9 +761,33 @@ fn parse_verification_config_param(
             let value = params::parse_boolean(v)?;
             config.allow_sha1 = Some(value);
         }
+        "allow_timestamp_in_future" => {
+            let value = params::parse_boolean(v)?;
+            config.allow_timestamp_in_future = Some(value);
+        }
+        "forbid_unsigned_content" => {
+            let value = params::parse_boolean(v)?;
+            config.forbid_unsigned_content = Some(value);
+        }
+        "lookup_timeout" => {
+            let value = params::parse_duration_secs(v)?;
+            config.lookup_timeout = Some(value);
+        }
+        "max_signatures" => {
+            let value = params::parse_u32_as_usize(v)?;
+            config.max_signatures = Some(value);
+        }
         "reject_failures" => {
             let value = params::parse_reject_failures(v)?;
-            config.reject_failures = Some(value);
+            config.reject_failures = Some(value.into());
+        }
+        "required_signed_headers" => {
+            let value = params::parse_field_names(v)?;
+            config.required_signed_headers = Some(value.into());
+        }
+        "time_tolerance" => {
+            let value = params::parse_duration_secs(v)?;
+            config.time_tolerance = Some(value);
         }
         _ => return Ok(false),
     }

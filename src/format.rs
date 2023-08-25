@@ -11,7 +11,7 @@ use viadkim::signature::DomainName;
 // TODO lots of code copied from SPF Milter
 
 // TODO consider not using viadkim's DomainName here?
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MailAddr {
     pub local_part: String,
     pub domain: DomainName,

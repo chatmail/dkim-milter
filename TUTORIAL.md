@@ -1,4 +1,4 @@
-# Tutorial
+# DKIM Milter tutorial
 
 TODO compare with OpenDKIM's ./opendkim/README document
 
@@ -21,8 +21,8 @@ Before stepping through this tutorial make sure you have the following ready:
 ## Install DKIM Milter
 
 First, ensure DKIM Milter is installed. **DKIM Milter has not been released yet,
-so you need to build from source using `cargo build`.** Make sure the
-`dkim-milter` program is on the search path and can be executed.
+you need to build from source using `cargo build`.** Make sure the `dkim-milter`
+program is on the search path and can be executed.
 
 The command `dkim-milter -V` should print version information.
 
@@ -32,7 +32,8 @@ configuration.
 
 The default configuration file belongs at /etc/dkim-milter/dkim-milter.conf.
 Create the directory /etc/dkim-milter and a for now empty file
-/etc/dkim-milter/dkim-milter.conf.
+/etc/dkim-milter/dkim-milter.conf. Usually, you need to run all such commands as
+root.
 
 ```
 mkdir /etc/dkim-milter
@@ -61,8 +62,8 @@ This is your private, secret key. Protect it well and don’t publish it anywher
 
 For setting up signing you need to pick a domain and selector. These values will
 appear in your DKIM signatures in the *d=* and *s=* tag, respectively. They also
-appear in the DNS TXT record at `<selector>._domainkey.<domain>`. You must have
-permission to create this TXT record later.
+appear in the DNS TXT record location at `<selector>._domainkey.<domain>`. You
+must have permission to create this TXT record later.
 
 The domain is your domain, where you have permission to install additional DNS
 records. We will use `example.com`.
@@ -86,7 +87,8 @@ signing_senders = /etc/dkim-milter/signing-senders
 /etc/dkim-milter/signing-keys should list the named keys that we want to use for
 signing. We generated an RSA signing key earlier and can now add it in this
 file. The first column is an arbitrary name, the second is the file path to the
-PEM file, prefixed with `<`:
+PEM file, prefixed with `<`. Lines starting with `#` are treated as comments and
+are ignored:
 
 ```
 # Key name    Signing key
@@ -96,7 +98,9 @@ my_rsa_key    </etc/dkim-milter/keys/my_rsa_key.pem
 /etc/dkim-milter/signing-senders should list the senders for whom we want to
 sign. The first column is the sender expression: This is an expression that will
 be matched against the message author in the *From* header. If it matches, then
-the message will be signed using the parameters in the remaining columns.
+the message will be signed using the parameters in the remaining columns. DKIM
+Milter will not sign anyone’s mail: The signing senders table is only consulted
+for authenticated connections or connections from a trusted network.
 
 Add the following in this file:
 
@@ -106,10 +110,16 @@ Add the following in this file:
 ```
 
 The sender expression `.example.com` matches any email address in the *From*
-header where the domain is *example.com* or a subdomain. The data in the
+header where the domain is either *example.com* or a subdomain. The data in the
 remaining columns should be familiar now: Your domain *example.com*; the
 selector that we settled on earlier; and the name of the signing key in the
 `signing_keys` file.
+
+To make a concrete example: When DKIM Milter handles an email message with
+header `From: Me Myself <me@example.com>`, it recognises the author domain
+example.com. It then consults the signing senders table, finds the matching
+entry, and will then generate and insert a signature with tags `d=example.com`,
+`s=rsa.2023`, and using key `my_rsa_key` for the cryptographic signature.
 
 ## Publish RSA public key
 
@@ -119,8 +129,8 @@ be published. We need to publish a DKIM public key record (that is, a TXT
 record) in DNS at `<selector>._domainkey.<domain>`. In our case, at
 `rsa.2023._domainkey.example.com`.
 
-The minimal format of this record is this, where `<key_data>` is the public key
-data:
+The minimal format of this record is the following, where `<key_data>` is the
+public key data:
 
 ```
 v=DKIM1; k=rsa; p=<key_data>
@@ -154,7 +164,7 @@ dig +short rsa.2023._domainkey.example.com. txt
 
 ## Set up systemd service
 
-We are interested in running DKIM Milter as a system service. One easy way to do
+Now, we would like to run DKIM Milter as a system service. One easy way to do
 this is to use a systemd service. It is good practice not to run such services
 as the superuser, but use a dedicated system user instead. So let’s create a
 `dkim-milter` system user. For example, on Debian and Ubuntu:
@@ -193,7 +203,7 @@ Restart=on-failure
 WantedBy=multi-user.target
 ```
 
-Almost there. Before starting the service, now the mandatory parameter `socket`
+Almost there! Before starting the service, now the mandatory parameter `socket`
 must be set, too. This is the socket through which the MTA will talk to the DKIM
 Milter service. A straightforward choice is a TCP socket, for example at port
 3000. Add it to /etc/dkim-milter/dkim-milter.conf:
@@ -213,11 +223,11 @@ service as running.
 
 ## Integration with Postfix
 
-Finally, in order to allow the MTA to speak to our DKIM Milter service, we must
-inform it of the new service by adding the listening socket in Postfix’s
-configuration.
+Finally, in order to allow the MTA to speak to our new DKIM Milter service, we
+must inform it of the service’s presence by adding the listening socket in
+Postfix’s configuration.
 
-Above, we picked port 3000 so that is where DKIM Milter is awaiting requests
+Above, we picked port 3000, so that is where DKIM Milter is awaiting requests
 from Postfix. Add this socket in `smtpd_milters` and `non_smtpd_milters` in
 Postfix’s main configuration file /etc/postfix/main.cf:
 
@@ -242,6 +252,9 @@ reload postfix`.
 
 ## Summary
 
+Your mail server is now signing and verifying mail according to the DKIM spec.
+Congratulations!
+
 As a summary, let us list briefly the files and directories that we created
 during this tutorial.
 
@@ -254,7 +267,7 @@ tree /etc/dkim-milter
 /etc/dkim-milter
 ├── dkim-milter.conf
 ├── keys
-│   └── my_rsa_key.pem
+│   └── my_rsa_key.pem
 ├── signing-keys
 └── signing-senders
 
@@ -267,9 +280,11 @@ The final configuration /etc/dkim-milter/dkim-milter.conf:
 socket = inet:localhost:3000
 signing_keys = /etc/dkim-milter/signing-keys
 signing_senders = /etc/dkim-milter/signing-senders
+# and optionally:
+delete_incoming_authentication_results = no
 ```
 
-The key /etc/dkim-milter/keys/my_rsa_key.pem:
+The signing key /etc/dkim-milter/keys/my_rsa_key.pem:
 
 ```
 -----BEGIN PRIVATE KEY-----
@@ -323,4 +338,4 @@ Further files that we used were:
 
 We also touched the Postfix configuration file /etc/postfix/main.cf.
 
-We also added a TXT record in DNS at rsa.2023._domainkey.example.com.
+We also added a TXT record in DNS at `rsa.2023._domainkey.example.com`.

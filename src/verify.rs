@@ -1,7 +1,7 @@
 use crate::{
     auth_results,
     config::{
-        model::{RejectFailure, VerificationConfig},
+        model::{PartialVerificationConfig, RejectFailure, VerificationConfig},
         Config, SessionConfig,
     },
     format::MailAddr,
@@ -10,7 +10,7 @@ use crate::{
 };
 use indymilter::{ContextActions, SetErrorReply, Status};
 use log::{debug, info};
-use std::{error::Error, net::IpAddr};
+use std::error::Error;
 use viadkim::{
     header::HeaderFields,
     message_hash::BodyHasherStance,
@@ -27,21 +27,36 @@ impl Verifier {
     pub async fn init(
         session_config: &SessionConfig,
         headers: HeaderFields,
-        ip: Option<IpAddr>,
-        recipients: &[String],
+        connection_overrides: &PartialVerificationConfig,
+        recipient_overrides: &PartialVerificationConfig,
     ) -> Self {
         let config = &session_config.config;
 
-        let vconfig = assemble_verification_config(ip, recipients, config);
+        let x = connection_overrides.merged_with(recipient_overrides);
+        let vconfig = config.verification_config.merged_with(&x);
 
         let allow_expired = vconfig.allow_expired;
-        let min_key_bits = vconfig.min_rsa_key_bits;
         let allow_sha1 = vconfig.allow_sha1;
+        let allow_timestamp_in_future = vconfig.allow_timestamp_in_future;
+        let forbid_unsigned_content = vconfig.forbid_unsigned_content;
+        let lookup_timeout = vconfig.lookup_timeout;
+        let max_signatures = vconfig.max_signatures;
+        let min_key_bits = vconfig.min_rsa_key_bits;
+        let time_tolerance = vconfig.time_tolerance;
+        let required_signed_headers = vconfig.required_signed_headers.iter()
+            .map(|h| h.as_ref().clone())
+            .collect();
 
         let config = verifier::Config {
             allow_expired,
-            min_key_bits,
             allow_sha1,
+            allow_timestamp_in_future,
+            forbid_unsigned_content,
+            lookup_timeout,
+            max_signatures,
+            min_key_bits,
+            required_signed_headers,
+            time_tolerance,
             ..Default::default()
         };
 
@@ -224,46 +239,8 @@ impl Verifier {
     }
 }
 
-fn assemble_verification_config(
-    ip: Option<IpAddr>,
-    recipients: &[String],
-    config: &Config,
-) -> VerificationConfig {
-    // TODO avoid all the cloning
-
-    let mut base_config = &config.verification_config;
-
-    let merged_config;
-    if let Some(ip) = ip {
-        if let Some(connection_overrides) = &config.connection_overrides {
-            for entry in connection_overrides {
-                if entry.net.contains(&ip) {
-                    merged_config = base_config.combine_with(&entry.config.verification_config);
-                    base_config = &merged_config;
-                    break;
-                }
-            }
-        }
-    }
-
-    // TODO duplicated
-    let merged_config2;
-    'outer: for recipient in recipients {
-        if let Some(recipient_overrides) = &config.recipient_overrides {
-            for overrides in &recipient_overrides.entries {
-                if overrides.expr.is_match(recipient) {
-                    merged_config2 = base_config.combine_with(&overrides.config.verification_config);
-                    base_config = &merged_config2;
-                    break 'outer;
-                }
-            }
-        }
-    }
-
-    base_config.clone()
-}
-
 pub fn get_domain_from_verification_result(res: &VerificationResult) -> String {
+    // TODO convert to U-form
     match &res.signature {
         Some(s) => s.domain.to_string(),
         None => {
@@ -280,10 +257,10 @@ pub fn get_domain_from_verification_result(res: &VerificationResult) -> String {
 }
 
 // Signature prefixes recorded in header.b are specified in RFC 6008. The RFC
-// does not say much about edge cases (of which there is an abundance). The
-// returned signature prefixes may not be unique. For example, if two b= tags
-// have identical values (this happens in practice due to clueless
-// administrators) there is no unique prefix, they will remain identical.
+// does not say much about edge cases. The returned signature prefixes may not
+// be unique. For example, if two b= tags have identical values (this happens in
+// practice due to clueless administrators) there is no unique prefix, they will
+// remain identical.
 pub fn compute_signature_prefixes(sigs: &[VerificationResult]) -> Vec<Option<String>> {
     let sigs: Vec<_> = sigs
         .iter()
@@ -303,6 +280,7 @@ fn make_b_string(r: &VerificationResult) -> Option<String> {
     // Else try to use whatever was salvaged as a string from the b= tag.
     // Careful, this could be any (malicious) thing.
     if let VerificationStatus::Failure(VerificationError::DkimSignatureFormat(e)) = &r.status {
+        // TODO may need to strip whitespace if impl in viadkim changes
         if let Some(s) = &e.signature_data {
             return Some(s.as_ref().into());
         }

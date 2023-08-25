@@ -62,10 +62,8 @@ fn format_resinfo_into_string(
 
     write!(result, ";\n\tdkim={ar}").unwrap();
 
-    if let Some(r) = &sig.key_record {
-        if r.is_testing_mode() {
-            write!(result, " (test mode)").unwrap();
-        }
+    if matches!(&sig.key_record, Some(r) if r.is_testing_mode()) {
+        write!(result, " (test mode)").unwrap();
     }
 
     if let Some(reason) = auth_results_reason_from_status(&sig.status) {
@@ -155,6 +153,7 @@ fn format_identity_into_string(
     signature: Option<&DkimSignature>,
     error: Option<&DkimSignatureError>,
 ) {
+    // TODO convert domain to U-form
     if let Some(signature) = signature {
         // TODO display identity properly, see SPF Milter
         if let Some(identity) = &signature.identity {

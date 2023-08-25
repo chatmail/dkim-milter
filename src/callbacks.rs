@@ -164,7 +164,7 @@ async fn handle_eoh(context: &mut Context<Session>) -> Status {
     let session = get_session!(context);
     let id = context.macros.queue_id();
 
-    match session.prepare_processing(&id).await {
+    match session.init_processing(&id).await {
         Ok(status) => status,
         Err(e) => {
             error!("{id}: failed to handle eoh callback: {e}");

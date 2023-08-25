@@ -1,18 +1,21 @@
-use crate::config::{
-    format,
-    model::{OverrideEntries, OverrideEntry, OverrideNetworkEntry, PartialSigningConfig},
-    ConfigError,
+use crate::{
+    config::{
+        format,
+        model::{OverrideEntries, OverrideEntry, OverrideNetworkEntry, PartialSigningConfig},
+        ConfigError,
+    },
+    session::{DomainExpr, IdentityDomainExpr, IdentityExpr, LocalPartExpr},
 };
 use ipnet::IpNet;
 use regex::Regex;
 use std::{
-    net::IpAddr,
-    str::FromStr,
     collections::HashMap,
     error::Error,
     fmt::{self, Display, Formatter},
     io::{self, ErrorKind},
+    net::IpAddr,
     path::PathBuf,
+    str::FromStr,
 };
 use tokio::fs;
 use viadkim::{
@@ -238,7 +241,7 @@ pub async fn read_recipient_overrides_table(
 #[derive(Debug)]
 pub struct TempSenderEntry {
     pub sender_expr: Regex,
-    pub domain: DomainName,
+    pub domain: DomainExpr,
     pub selector: Selector,
     pub key_name: String,
     pub signing_config: Option<PartialSigningConfig>,
@@ -280,7 +283,7 @@ async fn parse_signing_senders_table(
 
         let sender_expr = parse_sender_expr(sender_expr)
             .map_err(|_| TableFormatError::new(num, TableFormatErrorKind::InvalidExpr))?;
-        let domain = DomainName::new(domain)
+        let domain = parse_domain_expr(domain)
             .map_err(|_| TableFormatError::new(num, TableFormatErrorKind::InvalidDomain))?;
         let selector = Selector::new(selector)
             .map_err(|_| TableFormatError::new(num, TableFormatErrorKind::InvalidSelector))?;
@@ -354,6 +357,46 @@ fn parse_sender_expr(s: &str) -> Result<Regex, Box<dyn Error>> {
                 Ok(Regex::new(&re).unwrap())
             }
         }
+    }
+}
+
+fn parse_domain_expr(s: &str) -> Result<DomainExpr, Box<dyn Error>> {
+    if s == "." {
+        return Ok(DomainExpr::SenderDomain);
+    }
+
+    if let Some((lhs, rhs)) = s.rsplit_once('@') {
+        let domain_part = if rhs == "." {
+            IdentityDomainExpr::SenderDomain
+        } else {
+            match rhs.rsplit_once("..") {
+                Some((subdomain, domain)) => {
+                    let subdomain = Selector::new(subdomain).map_err(|_| "not a subdomain label")?;
+                    let domain = DomainName::new(domain).map_err(|_| "not a domain name")?;
+                    IdentityDomainExpr::SplitDomain(subdomain, domain)
+                }
+                None => {
+                    let domain = DomainName::new(rhs).map_err(|_| "not a domain name")?;
+                    IdentityDomainExpr::Domain(domain)
+                }
+            }
+        };
+
+        let local_part = if lhs.is_empty() {
+            None
+        } else if lhs == "." {
+            Some(LocalPartExpr::SenderLocalPart)
+        } else {
+            Some(LocalPartExpr::LocalPart(lhs.into()))
+        };
+
+        Ok(DomainExpr::Identity(IdentityExpr {
+            local_part,
+            domain_part,
+        }))
+    } else {
+        let domain = DomainName::new(s).map_err(|_| "not a domain name")?;
+        Ok(DomainExpr::Domain(domain))
     }
 }
 

@@ -5,13 +5,7 @@ use crate::config::{
         SignedHeaders, TrustedNetworks,
     },
 };
-use std::{
-    collections::HashSet,
-    net::IpAddr,
-    num::{NonZeroU32, ParseIntError},
-    str::FromStr,
-    time::Duration,
-};
+use std::{collections::HashSet, net::IpAddr, str::FromStr, time::Duration};
 use viadkim::crypto::HashAlgorithm;
 
 pub fn parse_boolean(s: &str) -> Result<bool, ParseParamError> {
@@ -121,7 +115,7 @@ pub fn parse_default_unsigned_headers(v: &str) -> Result<Vec<SignedFieldName>, P
     Ok(value)
 }
 
-fn parse_field_names(s: &str) -> Result<Vec<SignedFieldName>, ParseParamError> {
+pub fn parse_field_names(s: &str) -> Result<Vec<SignedFieldName>, ParseParamError> {
     let mut result = vec![];
 
     let mut seen: HashSet<SignedFieldName> = HashSet::new();
@@ -161,31 +155,41 @@ pub fn parse_expiration(s: &str) -> Result<Expiration, ParseParamError> {
         return Ok(Expiration::Never);
     }
 
-    let duration = parse_expiration_duration(s)
-        .map_err(|_| ParseParamError::InvalidExpiration(s.into()))?;
+    let duration = parse_duration_secs(s)?;
+
+    if duration.is_zero() {
+        // TODO rename error
+        return Err(ParseParamError::InvalidExpiration(s.into()));
+    }
 
     Ok(Expiration::After(duration))
 }
 
-// TODO don't use saturating but checked?
-fn parse_expiration_duration(s: &str) -> Result<Duration, ParseIntError> {
-    let seconds = if let Some(s) = s.strip_suffix('d') {
-        let days = NonZeroU32::from_str(s.trim_end())?;
-        let scale = NonZeroU32::new(24 * 60 * 60).unwrap();
-        days.saturating_mul(scale)
-    } else if let Some(s) = s.strip_suffix('h') {
-        let hours = NonZeroU32::from_str(s.trim_end())?;
-        let scale = NonZeroU32::new(60 * 60).unwrap();
-        hours.saturating_mul(scale)
-    } else if let Some(s) = s.strip_suffix('m') {
-        let minutes = NonZeroU32::from_str(s.trim_end())?;
-        let scale = NonZeroU32::new(60).unwrap();
-        minutes.saturating_mul(scale)
+// Parse a duration from u32-sized seconds. Resolution in seconds, subsecond
+// component not used.
+pub fn parse_duration_secs(input: &str) -> Result<Duration, ParseParamError> {
+    let seconds = if let Some(s) = input.strip_suffix('d') {
+        let days = u32::from_str(s.trim_end())
+            .map_err(|_| ParseParamError::InvalidDuration(input.into()))?;
+        days.checked_mul(24 * 60 * 60)
+            .ok_or_else(|| ParseParamError::InvalidDuration(input.into()))?
+    } else if let Some(s) = input.strip_suffix('h') {
+        let hours = u32::from_str(s.trim_end())
+            .map_err(|_| ParseParamError::InvalidDuration(input.into()))?;
+        hours.checked_mul(60 * 60)
+            .ok_or_else(|| ParseParamError::InvalidDuration(input.into()))?
+    } else if let Some(s) = input.strip_suffix('m') {
+        let minutes = u32::from_str(s.trim_end())
+            .map_err(|_| ParseParamError::InvalidDuration(input.into()))?;
+        minutes.checked_mul(60)
+            .ok_or_else(|| ParseParamError::InvalidDuration(input.into()))?
     } else {
-        let s = s.strip_suffix('s').unwrap_or(s);
-        NonZeroU32::from_str(s.trim_end())?
+        let s = input.strip_suffix('s').unwrap_or(input);
+        u32::from_str(s.trim_end())
+            .map_err(|_| ParseParamError::InvalidDuration(input.into()))?
     };
-    Ok(Duration::from_secs(seconds.get().into()))
+
+    Ok(Duration::from_secs(seconds.into()))
 }
 
 pub fn parse_reject_failures(s: &str) -> Result<RejectFailures, ParseParamError> {
@@ -288,6 +292,9 @@ mod tests {
 
     #[test]
     fn parse_oversigned_headers_ok() {
+        let headers = parse_oversigned_headers("").unwrap();
+        assert_eq!(headers, OversignedHeaders::Pick(vec![]));
+
         let headers = parse_oversigned_headers("signed").unwrap();
         assert_eq!(headers, OversignedHeaders::Signed);
 

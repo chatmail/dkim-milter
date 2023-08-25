@@ -8,8 +8,6 @@
 
 <br>
 
-TODO
-
 DKIM Milter is a milter application that signs or verifies email messages using
 the *DomainKeys Identified Mail* (DKIM) protocol. It is meant to be integrated
 with a milter-capable MTA (mail server) such as [Postfix]. DKIM is specified in
@@ -32,10 +30,9 @@ inspired some choices made here.
 
 ## Installation
 
-TODO
-
-DKIM Milter must be built or run from source code for now (initial development;
-working, but alpha quality).
+SPF Milter is a [Rust] project. It can be built and/or installed using Cargo.
+**DKIM Milter must be built from source code with `cargo build` for now**
+(initial development; working, but alpha quality).
 
 During building and installation the option `--features pre-rfc8301` can be
 specified to revert cryptographic algorithm and key usage back to before [RFC
@@ -43,11 +40,12 @@ specified to revert cryptographic algorithm and key usage back to before [RFC
 use of RSA key sizes below 1024 bits. Use of this feature is strongly
 discouraged.
 
+The minimum supported Rust version is 1.65.0.
+
+[Rust]: https://www.rust-lang.org
 [RFC 8301]: https://www.rfc-editor.org/rfc/rfc8301
 
 ## Usage
-
-TODO
 
 Once installed, DKIM Milter can be started on the command-line as `dkim-milter`.
 
@@ -55,34 +53,41 @@ Configuration parameters can be set in the default configuration file
 `/etc/dkim-milter/dkim-milter.conf`. The mandatory parameter `socket` must be
 set in that file.
 
-DKIM Milter is usually set up as a system service. Use the provided systemd
-service as a starting point.
+Invoking `dkim-milter` starts the milter in the foreground. Send a termination
+signal to the process or press Control-C to shut the milter down. While the
+milter is running, send signal SIGHUP to reload the configuration.
 
-The supported signing algorithms, for both signing and verifying, are
-`rsa-sha256` and `ed25519-sha256`. By default, the historic signing algorithm
+DKIM Milter is usually set up as a system service. Use the provided systemd
+service as a starting point. See the included TUTORIAL document for how to
+create the system service.
+
+The supported signature algorithms, for both signing and verifying, are
+`rsa-sha256` and `ed25519-sha256`. By default, the historic signature algorithm
 `rsa-sha1` is not supported, evaluation of such signatures yields a *permerror*
 result (RFC 8301; but see feature `pre-rfc8301` above).
 
 ## Configuration
 
-TODO
+The default configuration file is `/etc/dkim-milter/dkim-milter.conf`. **See the
+included example configuration for how to configure the milter, documentation is
+not complete yet.**
 
-The default configuration file is `/etc/dkim-milter/dkim-milter.conf`. See the
-included example configuration for how to configure the milter; documentation is
-not complete yet.
+The included manual page *dkim-milter.conf*(5) serves as the reference
+documentation. (You can view the manual page without installing by passing the
+file’s path to `man`: `man ./dkim-milter.conf.5`)
+
+For a hands-on introduction to getting started with DKIM Milter, please see the
+included TUTORIAL document.
 
 ### Design
 
-TODO
-
-The configuration is currently entirely file-based.
+The configuration is currently entirely file-based. **In the future, other data
+sources may be added.**
 
 The configuration consists at the minimum of the main configuration file
-`dkim-milter.conf`.
+`dkim-milter.conf`. The main configuration file contains global settings.
 
-The main configuration file contains global settings.
-
-The global settings can be overridden for certain inputs through *overrides* in
+The global settings can be overridden for selected inputs through *overrides* in
 table-like *override files*. Overrides can be applied to connecting network
 addresses, recipients (given in the `RCPT TO:` SMTP command), and to senders (in
 the *Sender* or *From* headers).
@@ -124,17 +129,21 @@ referenced by parameter `signing_senders`.
 The operating mode (sign-only, verify-only, or automatic per the above
 procedure) can also be configured with the `mode` parameter.
 
-### Basic usage
+### Signing senders
+
+Signing configuration is set up through two configuration parameters pointing to
+table-like files. **In the future, support for other data sources such as SQL
+databases may be added.** These parameters are `signing_senders` and
+`signing_keys`.
 
 ```
-socket = inet:localhost:3000
 signing_senders = /path/to/signing_senders_file
 signing_keys = /path/to/signing_keys_file
-authserv_id = mail.example.com
 ```
 
-The senders for which messages should be signed instead of verified are in the
-file configured in `signing_senders`:
+The main idea for configuring signing is the *signing senders* table (parameter
+`signing_senders`). This table links sender email addresses to a concrete
+signing configuration:
 
 ```
 # Sender expression   Domain        Selector   Signing key name
@@ -147,11 +156,11 @@ The sender expression `example.org` matches senders with that domain
 with that domain and also subdomains (`me@subdomain.example.org`). Caution:
 *Every* matching sender expression results in an additional DKIM signature for
 the message. In above example, messages from `me@example.org` are signed with
-two keys. (Multiple signatures are primarily useful for double-signing with both
-an Ed25519 and an RSA key.)
+two keys because both sender expressions match the address. (Multiple signatures
+are primarily useful for double-signing with both an Ed25519 and an RSA key.)
 
-The keys named in the fourth column in `signing_senders` are listed in the file
-configured in `signing_keys`:
+The keys named in the fourth column in the *signing senders* table are listed in
+the *signing keys* table (parameter `signing_keys`):
 
 ```
 # Key name   Key source
@@ -166,6 +175,42 @@ automatically.
 Additional per-signature (ie, per sender expression match) configuration
 overrides can be specified in the optional fifth column in the `signing_senders`
 file.
+
+Some additional features are briefly mentioned in the remainder of this section.
+In the domain column, a single dot `.` copies the domain from the matching
+sender address. The two entries in the following listing are equivalent, both
+generate tag `d=example.com`:
+
+```
+# Sender expression   Domain        ...
+example.com           example.com   ...
+example.com           .             ...
+```
+
+The signing senders table is also where the *signing identity*, that is the *i=*
+tag in the generated signature is configured: By default, signatures do not
+include the signing identity; use of the `@` character in the domain column
+enables the signing identity. **Design being explored.**
+
+```
+# Sender expression   Domain/Identity   ...
+
+example.com           @example.com      ...
+example.com           @.                ...
+# both => d=example.com, i=@example.com
+
+# Double dot separates i= subdomain from d= domain.
+mail.example.com      @mail..example.com
+# => d=example.com, i=@mail.example.com
+
+# The local-part before the @ may be included literally.
+example.com           user@example.com
+# => d=example.com, i=user@example.com
+
+# A dot before the @ copies the sender’s local-part into the i= tag.
+example.com           .@example.com
+# => d=example.com, i=user@example.com
+```
 
 ## Key setup
 

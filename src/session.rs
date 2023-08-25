@@ -1,7 +1,7 @@
 use crate::{
     auth_results,
     config::{
-        model::{OperationMode, PartialSigningConfig, SigningSenders},
+        model::{ConfigOverrides, OperationMode, PartialSigningConfig, SigningSenders},
         Config, SessionConfig,
     },
     format::{self, MailAddr},
@@ -35,6 +35,7 @@ pub enum SenderAddrError {
 struct ConnectionData {
     ip: Option<IpAddr>,
     hostname: Option<String>,
+    connection_overrides: Option<ConfigOverrides>,
 }
 
 impl ConnectionData {
@@ -206,7 +207,7 @@ impl Session {
         Ok(Status::Continue)
     }
 
-    pub async fn prepare_processing(&mut self, id: &str) -> Result<Status, Box<dyn Error>> {
+    pub async fn init_processing(&mut self, id: &str) -> Result<Status, Box<dyn Error>> {
         let message = match self.message.as_mut() {
             Some(message) => message,
             None => return Err("message context not available".into()),
@@ -222,6 +223,10 @@ impl Session {
             }
         };
 
+        // Minimalistic interpretation of RFC 6376, section 3.8: ‘Signers and
+        // Verifiers SHOULD take reasonable steps to ensure that the messages
+        // they are processing are valid according to [RFC5322], [RFC2045], and
+        // any other relevant message format standards.’
         if let Err(e) = header::validate_rfc5322(&headers) {
             // For now, simply log that we are proceeding with an ill-formed header.
             info!("{id}: proceeding with header not conforming to RFC 5322: {e}");
@@ -248,28 +253,16 @@ impl Session {
 
                     // signing mode if authorised and right domain to sign in From
                     if matches.is_empty() {
-                        debug!("{id}: accepted message from sender not configured for signing");
+                        debug!("{id}: accepted message from trusted sender not configured for signing");
                         return Ok(Status::Accept);
                     } else {
-                        debug!("{id}: entered signing mode");
+                        // TODO cloning b/c of borrow checker
+                        let sender: MailAddr = sender.unwrap().clone();
 
-                        let ip = self.conn.ip;
-                        let recipients = &self.message.as_ref().unwrap().recipients;
-
-                        let signer = Signer::init(&self.session_config.config, ip, recipients, headers, matches)?;
-
-                        Mode::Signing(signer)
+                        self.enter_signing_mode(id, headers, &sender, matches)?
                     }
                 } else if mode == OperationMode::Auto {
-                    debug!("{id}: entered verifying mode");
-
-                    let ip = self.conn.ip;
-                    // TODO delete `.clone()` once repaired version of viadkim published
-                    let recipients = self.message.as_ref().unwrap().recipients.clone();
-
-                    let verifier = Verifier::init(&self.session_config, headers, ip, &recipients).await;
-
-                    Mode::Verifying(verifier)
+                    self.enter_verifying_mode(id, headers).await
                 } else {
                     debug!("{id}: accepted message from untrusted sender");
                     return Ok(Status::Accept);
@@ -280,15 +273,7 @@ impl Session {
                     debug!("{id}: accepted message from trusted sender");
                     return Ok(Status::Accept);
                 } else {
-                    debug!("{id}: entered verifying mode");
-
-                    let ip = self.conn.ip;
-                    // TODO delete `.clone()` once repaired version of viadkim published
-                    let recipients = self.message.as_ref().unwrap().recipients.clone();
-
-                    let verifier = Verifier::init(&self.session_config, headers, ip, &recipients).await;
-
-                    Mode::Verifying(verifier)
+                    self.enter_verifying_mode(id, headers).await
                 }
             }
         };
@@ -297,6 +282,64 @@ impl Session {
         message.mode = mode;
 
         Ok(Status::Continue)
+    }
+
+    fn enter_signing_mode(
+        &mut self,
+        id: &str,
+        headers: HeaderFields,
+        sender: &MailAddr,
+        matches: Vec<SenderMatch>,
+    ) -> Result<Mode, Box<dyn Error>> {
+        debug!("{id}: entered signing mode");
+
+        // Connection overrides should be calculated only once
+        // for the connection and then cached.
+        // let (connection_overrides, recipient_overrides) = self.get_overrides();
+        let connection_overrides: &ConfigOverrides =
+            self.conn.connection_overrides.get_or_insert_with(|| {
+                get_connection_overrides(self.conn.ip, &self.session_config.config)
+            });
+
+        let recipients = &self.message.as_ref().unwrap().recipients;
+        let recipient_overrides: ConfigOverrides =
+            get_recipient_overrides(recipients, &self.session_config.config);
+
+        let signer = Signer::init(
+            &self.session_config.config,
+            headers,
+            sender,
+            matches,
+            &connection_overrides.signing_config,
+            &recipient_overrides.signing_config,
+        )?;
+
+        Ok(Mode::Signing(signer))
+    }
+
+    async fn enter_verifying_mode(
+        &mut self,
+        id: &str,
+        headers: HeaderFields,
+    ) -> Mode {
+        debug!("{id}: entered verifying mode");
+
+        // TODO duplicated
+        let connection_overrides: &ConfigOverrides =
+            self.conn.connection_overrides.get_or_insert_with(|| {
+                get_connection_overrides(self.conn.ip, &self.session_config.config)
+            });
+        // TODO delete `.clone()` once repaired version of viadkim published
+        let recipients = &self.message.as_ref().unwrap().recipients.clone();
+        let recipient_overrides: ConfigOverrides =
+            get_recipient_overrides(recipients, &self.session_config.config);
+
+        let verifier = Verifier::init(&self.session_config, headers,
+            &connection_overrides.verification_config,
+            &recipient_overrides.verification_config,
+        ).await;
+
+        Mode::Verifying(verifier)
     }
 
     pub fn process_body_chunk(&mut self, chunk: &[u8]) -> Result<Status, Box<dyn Error>> {
@@ -340,7 +383,9 @@ impl Session {
             Mode::Verifying(verifier) => {
                 let authserv_id = authserv_id(config, self.conn.hostname());
 
-                let status = verifier.finish(id, config, authserv_id, message.from_addresses.as_ref(), reply, actions).await?;
+                let status = verifier.finish(
+                    id, config, authserv_id, message.from_addresses.as_ref(), reply, actions
+                ).await?;
 
                 Ok(status)
             }
@@ -444,8 +489,35 @@ pub fn authserv_id<'a>(config: &'a Config, hostname: &'a str) -> &'a str {
 }
 
 #[derive(Clone, Debug)]
+pub enum DomainExpr {
+    Domain(DomainName),
+    SenderDomain,  // .
+    Identity(IdentityExpr),
+}
+
+#[derive(Clone, Debug)]
+pub struct IdentityExpr {
+    pub local_part: Option<LocalPartExpr>,
+    pub domain_part: IdentityDomainExpr,
+}
+
+#[derive(Clone, Debug)]
+pub enum LocalPartExpr {
+    LocalPart(String),
+    SenderLocalPart,  // .
+}
+
+#[derive(Clone, Debug)]
+pub enum IdentityDomainExpr {
+    Domain(DomainName),
+    SenderDomain,  // .
+    SplitDomain(Selector, DomainName),
+}
+
+// TODO move elsewhere
+#[derive(Clone, Debug)]
 pub struct SenderMatch {
-    pub domain: DomainName,
+    pub domain: DomainExpr,
     pub selector: Selector,
     pub key: Arc<SigningKey>,
     pub signing_config: Option<PartialSigningConfig>,
@@ -476,6 +548,39 @@ fn find_matching_senders(
     }
 
     matches
+}
+
+fn get_connection_overrides(ip: Option<IpAddr>, config: &Config) -> ConfigOverrides {
+    let mut result = ConfigOverrides::default();
+
+    if let Some(connection_overrides) = &config.connection_overrides {
+        if let Some(ip) = ip {
+            for entry in connection_overrides {
+                if entry.net.contains(&ip) {
+                    result.merge(&entry.config);
+                }
+            }
+        }
+    }
+
+    result
+}
+
+fn get_recipient_overrides(recipients: &[String], config: &Config) -> ConfigOverrides {
+    let mut result = ConfigOverrides::default();
+
+    if let Some(recipient_overrides) = &config.recipient_overrides {
+        for recipient in recipients {
+            // TODO ensure is parsable as email addr
+            for overrides in &recipient_overrides.entries {
+                if overrides.expr.is_match(recipient) {
+                    result.merge(&overrides.config);
+                }
+            }
+        }
+    }
+
+    result
 }
 
 async fn delete_auth_results_headers(

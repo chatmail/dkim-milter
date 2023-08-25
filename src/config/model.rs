@@ -1,3 +1,4 @@
+use crate::session::DomainExpr;
 use ipnet::IpNet;
 use regex::Regex;
 use std::{
@@ -13,7 +14,7 @@ use syslog::Facility;
 use viadkim::{
     crypto::{HashAlgorithm, SigningKey},
     header::{FieldName, HeaderFieldError},
-    signature::{Canonicalization, CanonicalizationAlgorithm, DomainName, Selector},
+    signature::{Canonicalization, CanonicalizationAlgorithm, Selector},
     signer,
 };
 
@@ -328,6 +329,13 @@ pub struct ConfigOverrides {
     pub verification_config: PartialVerificationConfig,
 }
 
+impl ConfigOverrides {
+    pub fn merge(&mut self, other: &Self) {
+        self.signing_config.merge(&other.signing_config);
+        self.verification_config.merge(&other.verification_config);
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct SigningConfig {
     pub default_signed_headers: Vec<SignedFieldName>,  // must include From
@@ -378,37 +386,38 @@ impl SigningConfig {
         Ok(())
     }
 
-    pub fn combine_with(&self, overrides: &PartialSigningConfig) -> Result<Self, Box<dyn Error>> {
+    pub fn merged_with(&self, overrides: &PartialSigningConfig) -> Result<Self, Box<dyn Error>> {
         let mut config = self.clone();
-        if let Some(default_signed_headers) = &overrides.default_signed_headers {
-            config.default_signed_headers = default_signed_headers.clone();
+
+        if let Some(value) = &overrides.default_signed_headers {
+            config.default_signed_headers = value.as_ref().clone();
         }
-        if let Some(default_unsigned_headers) = &overrides.default_unsigned_headers {
-            config.default_unsigned_headers = default_unsigned_headers.clone();
+        if let Some(value) = &overrides.default_unsigned_headers {
+            config.default_unsigned_headers = value.as_ref().clone();
         }
-        if let Some(signed_headers) = &overrides.signed_headers {
-            config.signed_headers = signed_headers.clone();
+        if let Some(value) = &overrides.signed_headers {
+            config.signed_headers = value.as_ref().clone();
         }
-        if let Some(oversigned_headers) = &overrides.oversigned_headers {
-            config.oversigned_headers = oversigned_headers.clone();
+        if let Some(value) = &overrides.oversigned_headers {
+            config.oversigned_headers = value.as_ref().clone();
         }
-        if let Some(hash_algorithm) = overrides.hash_algorithm {
-            config.hash_algorithm = hash_algorithm;
+        if let Some(value) = overrides.hash_algorithm {
+            config.hash_algorithm = value;
         }
-        if let Some(canonicalization) = overrides.canonicalization {
-            config.canonicalization = canonicalization;
+        if let Some(value) = overrides.canonicalization {
+            config.canonicalization = value;
         }
-        if let Some(expire_after) = overrides.expire_after {
-            config.expire_after = expire_after;
+        if let Some(value) = overrides.expire_after {
+            config.expire_after = value;
         }
-        if let Some(copy_headers) = overrides.copy_headers {
-            config.copy_headers = copy_headers;
+        if let Some(value) = overrides.copy_headers {
+            config.copy_headers = value;
         }
-        if let Some(limit_body_length) = overrides.limit_body_length {
-            config.limit_body_length = limit_body_length;
+        if let Some(value) = overrides.limit_body_length {
+            config.limit_body_length = value;
         }
-        if let Some(request_reports) = overrides.request_reports {
-            config.request_reports = request_reports;
+        if let Some(value) = overrides.request_reports {
+            config.request_reports = value;
         }
 
         config.check_invariants()?;
@@ -443,10 +452,10 @@ impl Default for SigningConfig {
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct PartialSigningConfig {
-    pub default_signed_headers: Option<Vec<SignedFieldName>>,
-    pub default_unsigned_headers: Option<Vec<SignedFieldName>>,
-    pub signed_headers: Option<SignedHeaders>,
-    pub oversigned_headers: Option<OversignedHeaders>,
+    pub default_signed_headers: Option<Arc<Vec<SignedFieldName>>>,
+    pub default_unsigned_headers: Option<Arc<Vec<SignedFieldName>>>,
+    pub signed_headers: Option<Arc<SignedHeaders>>,
+    pub oversigned_headers: Option<Arc<OversignedHeaders>>,
     pub hash_algorithm: Option<HashAlgorithm>,
     pub canonicalization: Option<Canonicalization>,
     pub expire_after: Option<Expiration>,
@@ -456,8 +465,8 @@ pub struct PartialSigningConfig {
 }
 
 impl PartialSigningConfig {
-    pub fn combine_with(&self, overrides: &PartialSigningConfig) -> Self {
-        PartialSigningConfig {
+    pub fn merged_with(&self, overrides: &Self) -> Self {
+        Self {
             default_signed_headers: overrides.default_signed_headers.as_ref()
                 .or(self.default_signed_headers.as_ref())
                 .cloned(),
@@ -479,37 +488,71 @@ impl PartialSigningConfig {
         }
     }
 
+    pub fn merge(&mut self, other: &Self) {
+        if let Some(value) = &other.default_signed_headers {
+            self.default_signed_headers = Some(value.clone());
+        }
+        if let Some(value) = &other.default_unsigned_headers {
+            self.default_unsigned_headers = Some(value.clone());
+        }
+        if let Some(value) = &other.signed_headers {
+            self.signed_headers = Some(value.clone());
+        }
+        if let Some(value) = &other.oversigned_headers {
+            self.oversigned_headers = Some(value.clone());
+        }
+        if let Some(value) = other.hash_algorithm {
+            self.hash_algorithm = Some(value);
+        }
+        if let Some(value) = other.canonicalization {
+            self.canonicalization = Some(value);
+        }
+        if let Some(value) = other.expire_after {
+            self.expire_after = Some(value);
+        }
+        if let Some(value) = other.copy_headers {
+            self.copy_headers = Some(value);
+        }
+        if let Some(value) = other.limit_body_length {
+            self.limit_body_length = Some(value);
+        }
+        if let Some(value) = other.request_reports {
+            self.request_reports = Some(value);
+        }
+    }
+
     pub fn into_signing_config(self) -> Result<SigningConfig, Box<dyn Error>> {
         let mut config = SigningConfig::default();
-        if let Some(default_signed_headers) = self.default_signed_headers {
-            config.default_signed_headers = default_signed_headers;
+
+        if let Some(value) = self.default_signed_headers {
+            config.default_signed_headers = unwrap_arc(value);
         }
-        if let Some(default_unsigned_headers) = self.default_unsigned_headers {
-            config.default_unsigned_headers = default_unsigned_headers;
+        if let Some(value) = self.default_unsigned_headers {
+            config.default_unsigned_headers = unwrap_arc(value);
         }
-        if let Some(signed_headers) = self.signed_headers {
-            config.signed_headers = signed_headers;
+        if let Some(value) = self.signed_headers {
+            config.signed_headers = unwrap_arc(value);
         }
-        if let Some(oversigned_headers) = self.oversigned_headers {
-            config.oversigned_headers = oversigned_headers;
+        if let Some(value) = self.oversigned_headers {
+            config.oversigned_headers = unwrap_arc(value);
         }
-        if let Some(hash_algorithm) = self.hash_algorithm {
-            config.hash_algorithm = hash_algorithm;
+        if let Some(value) = self.hash_algorithm {
+            config.hash_algorithm = value;
         }
-        if let Some(canonicalization) = self.canonicalization {
-            config.canonicalization = canonicalization;
+        if let Some(value) = self.canonicalization {
+            config.canonicalization = value;
         }
-        if let Some(expire_after) = self.expire_after {
-            config.expire_after = expire_after;
+        if let Some(value) = self.expire_after {
+            config.expire_after = value;
         }
-        if let Some(copy_headers) = self.copy_headers {
-            config.copy_headers = copy_headers;
+        if let Some(value) = self.copy_headers {
+            config.copy_headers = value;
         }
-        if let Some(limit_body_length) = self.limit_body_length {
-            config.limit_body_length = limit_body_length;
+        if let Some(value) = self.limit_body_length {
+            config.limit_body_length = value;
         }
-        if let Some(request_reports) = self.request_reports {
-            config.request_reports = request_reports;
+        if let Some(value) = self.request_reports {
+            config.request_reports = value;
         }
 
         config.check_invariants()?;
@@ -544,7 +587,7 @@ pub struct SigningSenders {
 #[derive(Clone, Debug)]
 pub struct SenderEntry {
     pub sender_expr: Regex,
-    pub domain: DomainName,
+    pub domain: DomainExpr,
     pub selector: Selector,
     // TODO no longer "_name"
     pub key_name: Arc<SigningKey>,
@@ -555,26 +598,51 @@ pub struct SenderEntry {
 pub struct VerificationConfig {
     pub allow_expired: bool,
     pub allow_sha1: bool,
+    pub allow_timestamp_in_future: bool,
+    pub forbid_unsigned_content: bool,
+    pub lookup_timeout: Duration,
+    pub max_signatures: usize,
     pub min_rsa_key_bits: usize,
     pub reject_failures: RejectFailures,
+    pub required_signed_headers: Vec<SignedFieldName>,
+    pub time_tolerance: Duration,
 }
 
 impl VerificationConfig {
-    pub fn combine_with(&self, overrides: &PartialVerificationConfig) -> Self {
-        // TODO avoid cloning
+    pub fn merged_with(&self, overrides: &PartialVerificationConfig) -> Self {
         let mut config = self.clone();
-        if let Some(allow_expired) = overrides.allow_expired {
-            config.allow_expired = allow_expired;
+
+        if let Some(value) = overrides.allow_expired {
+            config.allow_expired = value;
         }
-        if let Some(allow_sha1) = overrides.allow_sha1 {
-            config.allow_sha1 = allow_sha1;
+        if let Some(value) = overrides.allow_sha1 {
+            config.allow_sha1 = value;
         }
-        if let Some(min_rsa_key_bits) = overrides.min_rsa_key_bits {
-            config.min_rsa_key_bits = min_rsa_key_bits;
+        if let Some(value) = overrides.allow_timestamp_in_future {
+            config.allow_timestamp_in_future = value;
         }
-        if let Some(reject_failures) = &overrides.reject_failures {
-            config.reject_failures = reject_failures.clone();
+        if let Some(value) = overrides.forbid_unsigned_content {
+            config.forbid_unsigned_content = value;
         }
+        if let Some(value) = overrides.lookup_timeout {
+            config.lookup_timeout = value;
+        }
+        if let Some(value) = overrides.max_signatures {
+            config.max_signatures = value;
+        }
+        if let Some(value) = overrides.min_rsa_key_bits {
+            config.min_rsa_key_bits = value;
+        }
+        if let Some(value) = &overrides.reject_failures {
+            config.reject_failures = value.as_ref().clone();
+        }
+        if let Some(value) = &overrides.required_signed_headers {
+            config.required_signed_headers = value.as_ref().clone();
+        }
+        if let Some(value) = overrides.time_tolerance {
+            config.time_tolerance = value;
+        }
+
         config
     }
 }
@@ -584,8 +652,14 @@ impl Default for VerificationConfig {
         Self {
             allow_expired: false,
             allow_sha1: false,
+            allow_timestamp_in_future: false,
+            forbid_unsigned_content: false,
+            lookup_timeout: Duration::from_secs(10),
+            max_signatures: 10,
             min_rsa_key_bits: 1024,
             reject_failures: Default::default(),
+            required_signed_headers: Default::default(),
+            time_tolerance: Duration::from_secs(30),
         }
     }
 }
@@ -594,25 +668,107 @@ impl Default for VerificationConfig {
 pub struct PartialVerificationConfig {
     pub allow_expired: Option<bool>,
     pub allow_sha1: Option<bool>,
+    pub allow_timestamp_in_future: Option<bool>,
+    pub forbid_unsigned_content: Option<bool>,
+    pub lookup_timeout: Option<Duration>,
+    pub max_signatures: Option<usize>,
     pub min_rsa_key_bits: Option<usize>,
-    pub reject_failures: Option<RejectFailures>,
+    pub reject_failures: Option<Arc<RejectFailures>>,
+    pub required_signed_headers: Option<Arc<Vec<SignedFieldName>>>,
+    pub time_tolerance: Option<Duration>,
 }
 
 impl PartialVerificationConfig {
+    pub fn merged_with(&self, overrides: &Self) -> Self {
+        Self {
+            allow_expired: overrides.allow_expired.or(self.allow_expired),
+            allow_sha1: overrides.allow_sha1.or(self.allow_sha1),
+            allow_timestamp_in_future: overrides.allow_timestamp_in_future.or(self.allow_timestamp_in_future),
+            forbid_unsigned_content: overrides.forbid_unsigned_content.or(self.forbid_unsigned_content),
+            lookup_timeout: overrides.lookup_timeout.or(self.lookup_timeout),
+            max_signatures: overrides.max_signatures.or(self.max_signatures),
+            min_rsa_key_bits: overrides.min_rsa_key_bits.or(self.min_rsa_key_bits),
+            reject_failures: overrides.reject_failures.as_ref()
+                .or(self.reject_failures.as_ref())
+                .cloned(),
+            required_signed_headers: overrides.required_signed_headers.as_ref()
+                .or(self.required_signed_headers.as_ref())
+                .cloned(),
+            time_tolerance: overrides.time_tolerance.or(self.time_tolerance),
+        }
+    }
+
+    pub fn merge(&mut self, other: &Self) {
+        if let Some(value) = other.allow_expired {
+            self.allow_expired = Some(value);
+        }
+        if let Some(value) = other.allow_sha1 {
+            self.allow_sha1 = Some(value);
+        }
+        if let Some(value) = other.allow_timestamp_in_future {
+            self.allow_timestamp_in_future = Some(value);
+        }
+        if let Some(value) = other.forbid_unsigned_content {
+            self.forbid_unsigned_content = Some(value);
+        }
+        if let Some(value) = other.lookup_timeout {
+            self.lookup_timeout = Some(value);
+        }
+        if let Some(value) = other.max_signatures {
+            self.max_signatures = Some(value);
+        }
+        if let Some(value) = other.min_rsa_key_bits {
+            self.min_rsa_key_bits = Some(value);
+        }
+        if let Some(value) = &other.reject_failures {
+            self.reject_failures = Some(value.clone());
+        }
+        if let Some(value) = &other.required_signed_headers {
+            self.required_signed_headers = Some(value.clone());
+        }
+        if let Some(value) = other.time_tolerance {
+            self.time_tolerance = Some(value);
+        }
+    }
+
     pub fn into_verification_config(self) -> VerificationConfig {
         let mut config = VerificationConfig::default();
-        if let Some(allow_expired) = self.allow_expired {
-            config.allow_expired = allow_expired;
+
+        if let Some(value) = self.allow_expired {
+            config.allow_expired = value;
         }
-        if let Some(allow_sha1) = self.allow_sha1 {
-            config.allow_sha1 = allow_sha1;
+        if let Some(value) = self.allow_sha1 {
+            config.allow_sha1 = value;
         }
-        if let Some(min_rsa_key_bits) = self.min_rsa_key_bits {
-            config.min_rsa_key_bits = min_rsa_key_bits;
+        if let Some(value) = self.allow_timestamp_in_future {
+            config.allow_timestamp_in_future = value;
         }
-        if let Some(reject_failures) = self.reject_failures {
-            config.reject_failures = reject_failures;
+        if let Some(value) = self.forbid_unsigned_content {
+            config.forbid_unsigned_content = value;
         }
+        if let Some(value) = self.lookup_timeout {
+            config.lookup_timeout = value;
+        }
+        if let Some(value) = self.max_signatures {
+            config.max_signatures = value;
+        }
+        if let Some(value) = self.min_rsa_key_bits {
+            config.min_rsa_key_bits = value;
+        }
+        if let Some(value) = self.reject_failures {
+            config.reject_failures = unwrap_arc(value);
+        }
+        if let Some(value) = self.required_signed_headers {
+            config.required_signed_headers = unwrap_arc(value);
+        }
+        if let Some(value) = self.time_tolerance {
+            config.time_tolerance = value;
+        }
+
         config
     }
+}
+
+fn unwrap_arc<T: Clone>(arc: Arc<T>) -> T {
+    Arc::try_unwrap(arc).unwrap_or_else(|a| a.as_ref().clone())
 }

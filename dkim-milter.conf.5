@@ -188,6 +188,19 @@ evaluate to
 .I permerror
 without being verified.
 .TP
+.BR allow_timestamp_in_future " (\fIboolean\fR)"
+Whether to evaluate signatures with a timestamp in the future as passing.
+.TP
+.BR forbid_unsigned_content " (\fIboolean\fR)"
+Whether to evaluate signatures that don’t cover the entire message body content
+as passing.
+.TP
+.BR lookup_timeout " (\fIduration\fR)"
+Maximum time to allow when querying for DKIM public key records.
+.TP
+.BR max_signatures " (\fIinteger\fR)"
+Maximum number of signatures to verify in a message.
+.TP
 .BR min_rsa_key_bits " (\fIinteger\fR)"
 The minimum allowed RSA key size in bits.
 If a signature was created with an RSA key of a size below this threshold, the
@@ -216,6 +229,8 @@ header matches (that is, is equal to or a subdomain of) the signing domain in
 the signature’s
 .I d=
 tag.
+The failure specifications correspond to the three DKIM failure status codes
+specified in RFC\~7372, section\~3.1.
 Note that a failing signature is treated as passing if the DKIM public key
 record is marked as being in test mode
 .RI ( t=y ).
@@ -224,6 +239,13 @@ According to RFC\~6376, section\~6.3 use of this parameter is discouraged.
 However, it may be useful when applied to certain known senders only, for
 example, through an entry in
 .BR connection_overrides .
+.TP
+.BR required_signed_headers " (\fIcolon-separated\fR)"
+The set of headers required to be included in a signature.
+.TP
+.BR time_tolerance " (\fIduration\fR)"
+Time tolerance when evaluating timestamp and expiration in signatures, in order
+to allow for clock drift.
 .SH FILES
 .I /etc/dkim-milter/dkim-milter.conf
 .SH SEE ALSO

@@ -1,21 +1,22 @@
 use crate::{
     config::{
         model::{
-            Expiration, OverrideEntries, OverrideNetworkEntry, OversignedHeaders,
-            PartialSigningConfig, SignedFieldName, SignedHeaders, SigningConfig,
+            Expiration, OversignedHeaders, PartialSigningConfig, SignedFieldName, SignedHeaders,
+            SigningConfig,
         },
         Config,
     },
-    session::SenderMatch,
+    format::MailAddr,
+    session::{DomainExpr, IdentityDomainExpr, LocalPartExpr, SenderMatch},
 };
 use indymilter::{ActionError, ContextActions, Status};
 use log::{error, info};
-use std::{collections::HashSet, error::Error, net::IpAddr, sync::Arc};
+use std::{collections::HashSet, error::Error, sync::Arc};
 use viadkim::{
     crypto::SigningKey,
     header::{FieldName, HeaderFields},
     message_hash::BodyHasherStance,
-    signature::{DomainName, Selector, SigningAlgorithm},
+    signature::{DomainName, Identity, Selector, SigningAlgorithm},
     signer::{self, BodyLength, HeaderSelection, SignRequest, SigningResult},
 };
 
@@ -26,50 +27,38 @@ pub struct Signer {
 impl Signer {
     pub fn init(
         config: &Config,
-        ip: Option<IpAddr>,
-        recipients: &[String],
         headers: HeaderFields,
+        sender: &MailAddr,
         matches: Vec<SenderMatch>,
+        connection_overrides: &PartialSigningConfig,
+        recipient_overrides: &PartialSigningConfig,
     ) -> Result<Self, Box<dyn Error>> {
         assert!(!matches.is_empty());
 
-        // TODO
-
-        let connection_overrides = config
-            .connection_overrides
-            .as_ref()
-            .and_then(|overrides| find_matching_connection_overrides(overrides, ip));
-
-        let recipient_overrides = config
-            .recipient_overrides
-            .as_ref()
-            .and_then(|overrides| find_matching_recipient_overrides(overrides, recipients));
-
-        let base_overrides_config = match (connection_overrides, recipient_overrides) {
-            (Some(o1), Some(o2)) => Some(o1.combine_with(&o2)),
-            (Some(o), None) | (None, Some(o)) => Some(o),
-            (None, None) => None,
-        };
-
         // step through matches and create SignRequest for each match
+
+        // TODO limit number of matches processed - abort and warn if exceeded
 
         let mut requests = vec![];
         for match_ in matches {
-            let domain = match_.domain;
+            let (domain, identity) = get_identifiers(match_.domain, sender);
             let selector = match_.selector;
             let signing_key = match_.key;
 
-            let signing_config = match (&match_.signing_config, &base_overrides_config) {
-                (Some(c1), Some(c2)) => {
-                    // TODO shouldn't c1 override c2?
-                    let combined = c1.combine_with(c2);
-                    config.signing_config.combine_with(&combined)
+            let final_overrides: PartialSigningConfig = match &match_.signing_config {
+                Some(c) => {
+                    // If there are per-sender/per-signature signing config
+                    // overrides, combine them all together. The recipient
+                    // overrides come last.
+                    let x = connection_overrides.merged_with(c);
+                    x.merged_with(recipient_overrides)
                 }
-                (Some(c), None) | (None, Some(c)) => config.signing_config.combine_with(c),
-                (None, None) => Ok(config.signing_config.clone()),
+                None => {
+                    connection_overrides.merged_with(recipient_overrides)
+                }
             };
 
-            let signing_config = match signing_config {
+            let signing_config = match config.signing_config.merged_with(&final_overrides) {
                 Ok(config) => config,
                 Err(e) => {
                     error!("failed to construct valid signing configuration, ignoring request: {e}");
@@ -77,7 +66,7 @@ impl Signer {
                 }
             };
 
-            match make_sign_request(&signing_config, &headers, domain, selector, signing_key) {
+            match make_sign_request(&signing_config, &headers, domain, identity, selector, signing_key) {
                 Ok(request) => {
                     requests.push(request);
                 }
@@ -140,40 +129,44 @@ impl Signer {
     }
 }
 
-fn find_matching_connection_overrides(
-    connection_overrides: &[OverrideNetworkEntry],
-    ip: Option<IpAddr>,
-) -> Option<PartialSigningConfig> {
-    if let Some(ip) = ip {
-        for entry in connection_overrides {
-            if entry.net.contains(&ip) {
-                return Some(entry.config.signing_config.clone());
-            }
-        }
-    }
-    None
-}
+fn get_identifiers(domain: DomainExpr, sender: &MailAddr) -> (DomainName, Option<Identity>) {
+    match domain {
+        DomainExpr::Domain(domain) => (domain, None),
+        DomainExpr::SenderDomain => (sender.domain.clone(), None),
+        DomainExpr::Identity(identity) => {
+            let local_part = identity.local_part.map(|lp| match lp {
+                LocalPartExpr::LocalPart(lp) => lp,
+                LocalPartExpr::SenderLocalPart => sender.local_part.clone(),
+            });
 
-fn find_matching_recipient_overrides(
-    recipient_overrides: &OverrideEntries,
-    recipients: &[String],
-    // from_address: &MailAddr,
-) -> Option<PartialSigningConfig> {
-    for recipient in recipients {
-        // TODO ensure is parsable as email addr
-        for overrides in &recipient_overrides.entries {
-            if overrides.expr.is_match(recipient) {
-                return Some(overrides.config.signing_config.clone());
-            }
+            let (domain, identity_domain) = match identity.domain_part {
+                IdentityDomainExpr::Domain(domain) => {
+                    let domain2 = domain.clone();
+                    (domain, domain2)
+                }
+                IdentityDomainExpr::SenderDomain => (sender.domain.clone(), sender.domain.clone()),
+                IdentityDomainExpr::SplitDomain(subdomain, domain) => {
+                    let d = format!("{}.{}", subdomain, domain);
+                    let identity_domain = DomainName::new(d).unwrap();
+                    (domain, identity_domain)
+                }
+            };
+
+            let identity = Some(Identity {
+                local_part: local_part.map(From::from),
+                domain_part: identity_domain,
+            });
+
+            (domain, identity)
         }
     }
-    None
 }
 
 fn make_sign_request(
     config: &SigningConfig,
     headers: &HeaderFields,
     domain: DomainName,
+    identity: Option<Identity>,
     selector: Selector,
     signing_key: Arc<SigningKey>,
 ) -> Result<SignRequest<Arc<SigningKey>>, Box<dyn Error>> {
@@ -184,6 +177,8 @@ fn make_sign_request(
         .ok_or("invalid key type/hash algorithm pair")?;
 
     let mut request = SignRequest::new(domain, selector, alg, signing_key);
+
+    request.identity = identity;
 
     request.canonicalization = config.canonicalization;
 
