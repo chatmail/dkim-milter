@@ -2,7 +2,7 @@ use crate::config::{
     format::ParseParamError,
     model::{
         Expiration, OversignedHeaders, RejectFailure, RejectFailures, SignedFieldName,
-        SignedHeaders, TrustedNetworks,
+        SignedFieldNameWithQualifier, SignedHeaders, TrustedNetworks,
     },
 };
 use std::{collections::HashSet, net::IpAddr, str::FromStr, time::Duration};
@@ -36,7 +36,7 @@ pub fn parse_trusted_networks(s: &str) -> Result<TrustedNetworks, ParseParamErro
         } else {
             let net = value
                 .parse()
-                .or_else(|_| value.parse::<IpAddr>().map(From::from))
+                .or_else(|_| value.parse::<IpAddr>().map(Into::into))
                 .map_err(|_| ParseParamError::InvalidNetworkAddress(value.into()))?;
             trusted_networks.networks.insert(net);
         }
@@ -84,9 +84,9 @@ pub fn parse_oversigned_headers(s: &str) -> Result<OversignedHeaders, ParseParam
         }
     }
 
-    if let Some(rest) = s.strip_prefix("exhaustive") {
+    if let Some(rest) = s.strip_prefix("signed-extended") {
         if rest.is_empty() {
-            return Ok(OversignedHeaders::Exhaustive);
+            return Ok(OversignedHeaders::Extended);
         }
     }
 
@@ -118,7 +118,7 @@ pub fn parse_default_unsigned_headers(v: &str) -> Result<Vec<SignedFieldName>, P
 pub fn parse_field_names(s: &str) -> Result<Vec<SignedFieldName>, ParseParamError> {
     let mut result = vec![];
 
-    let mut seen: HashSet<SignedFieldName> = HashSet::new();
+    let mut seen = HashSet::new();
 
     // A trailing colon is allowed for disambiguation. For example, if someone
     // configures `oversigned_headers = signed`, `signed` is a special token; if
@@ -130,6 +130,49 @@ pub fn parse_field_names(s: &str) -> Result<Vec<SignedFieldName>, ParseParamErro
             .map_err(|_| ParseParamError::InvalidFieldName(s.into()))?;
         if seen.insert(name.clone()) {
             result.push(name);
+        }
+        // duplicate values ignored
+    }
+
+    Ok(result)
+}
+
+pub fn parse_qualified_field_names(s: &str) -> Result<Vec<SignedFieldNameWithQualifier>, ParseParamError> {
+    enum Qualifier { Bare, Plus, Asterisk }
+    use Qualifier::*;
+
+    let mut result = vec![];
+
+    let mut seen = HashSet::new();
+
+    for s in split_at_colon(s) {
+        let mut s = s?;
+
+        // But what if some poor soul wants to specify a header named literally
+        // "Bla++" or some such? No, this is not supported.
+        let qualifier = if let Some(rest) = s.strip_suffix('+') {
+            // TODO strip ws
+            s = rest.trim();
+            Plus
+        } else if let Some(rest) = s.strip_suffix('*') {
+            // TODO strip ws
+            s = rest.trim();
+            Asterisk
+        } else {
+            Bare
+        };
+
+        let name = SignedFieldName::new(s)
+            .map_err(|_| ParseParamError::InvalidFieldName(s.into()))?;
+
+        if seen.insert(name.clone()) {
+            match qualifier {
+                Bare => result.push(SignedFieldNameWithQualifier::Bare(name)),
+                Plus => result.push(SignedFieldNameWithQualifier::Plus(name)),
+                Asterisk => result.push(SignedFieldNameWithQualifier::Asterisk(name)),
+            }
+        } else {
+            return Err(ParseParamError::DuplicateFieldName(name));
         }
     }
 
@@ -210,15 +253,15 @@ pub fn parse_reject_failures(s: &str) -> Result<RejectFailures, ParseParamError>
 }
 
 // colon cannot appear in field names, so is a good choice for the separator
-fn split_at_colon(value: &str) -> impl Iterator<Item = Result<&str, ParseParamError>> {
+fn split_at_colon(value: &str) -> impl DoubleEndedIterator<Item = Result<&str, ParseParamError>> {
     split_terminator(value, ':')
 }
 
-fn split_at_comma(value: &str) -> impl Iterator<Item = Result<&str, ParseParamError>> {
+fn split_at_comma(value: &str) -> impl DoubleEndedIterator<Item = Result<&str, ParseParamError>> {
     split_separator(value, ',')
 }
 
-fn split_separator(value: &str, sep: char) -> impl Iterator<Item = Result<&str, ParseParamError>> {
+fn split_separator(value: &str, sep: char) -> impl DoubleEndedIterator<Item = Result<&str, ParseParamError>> {
     let value = value.trim();
 
     let mut values = value.split(sep);
@@ -239,7 +282,7 @@ fn split_separator(value: &str, sep: char) -> impl Iterator<Item = Result<&str, 
     })
 }
 
-fn split_terminator(value: &str, sep: char) -> impl Iterator<Item = Result<&str, ParseParamError>> {
+fn split_terminator(value: &str, sep: char) -> impl DoubleEndedIterator<Item = Result<&str, ParseParamError>> {
     let value = value.trim();
 
     let mut values = value.split_terminator(sep);

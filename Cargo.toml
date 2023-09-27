@@ -11,7 +11,6 @@ repository = "https://gitlab.com/glts/dkim-milter"
 exclude = ["/.gitignore", "/.gitlab-ci.yml"]
 
 [dependencies]
-bstr = { version = "1.5.0", default-features = false, features = ["std"] }
 byte-strings = "0.3.1"
 domain = { version = "0.8.0", features = ["resolv"] }
 futures = "0.3.28"
@@ -25,11 +24,12 @@ signal-hook = "0.3.15"
 signal-hook-tokio = { version = "0.3.1", features = ["futures-v0_3"] }
 syslog = "6.1.0"
 tokio = { version = "1.29.1", features = ["fs", "macros", "net", "rt", "rt-multi-thread", "sync"] }
-viadkim = "0.0.5"
+viadkim = "0.0.6"
 # viadkim = { path = "../viadkim" }
 
 [dev-dependencies]
-indymilter-test = "0.0.3"
+indymilter-test = "0.1.0"
 
 [features]
+# Reverts cryptographic algorithm and key usage to before RFC 8301.
 pre-rfc8301 = ["viadkim/pre-rfc8301"]

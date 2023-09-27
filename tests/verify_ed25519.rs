@@ -3,7 +3,6 @@ mod common;
 pub use common::*;
 
 use dkim_milter::*;
-use indymilter::MacroStage;
 use indymilter_test::*;
 use std::io::ErrorKind;
 use log::debug;
@@ -95,13 +94,13 @@ Dave
     let (actions, status) = conn.eom().await.unwrap();
     assert_eq!(status, Status::Continue);
 
-    debug!("EOM replies: {:?}", &actions.replies);
+    debug!("EOM replies: {:?}", actions);
 
     assert!(actions.has_insert_header(
         0,
         "Authentication-Results",
         " example.gluet.ch;\n\
-        \tdkim=pass header.d=gluet.ch\n\
+        \tdkim=pass header.d=gluet.ch header.i=@gluet.ch\n\
         \t header.a=ed25519-sha256 header.s=sel1 header.b=SSlQloji",
     ));
 

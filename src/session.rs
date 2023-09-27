@@ -6,15 +6,23 @@ use crate::{
     },
     format::{self, MailAddr},
     sign::Signer,
+    util,
     verify::Verifier,
 };
-use bstr::ByteSlice;
 use indymilter::{ActionError, ContextActions, SetErrorReply, Status};
 use log::{debug, info};
-use std::{borrow::Cow, error::Error, ffi::CString, mem, net::IpAddr, sync::Arc};
+use std::{
+    borrow::Cow,
+    error::Error,
+    ffi::CString,
+    fmt::{self, Display, Formatter},
+    mem,
+    net::IpAddr,
+    sync::Arc,
+};
 use viadkim::{
     crypto::SigningKey,
-    header::{self, FieldBody, FieldName, HeaderFields},
+    header::{FieldBody, FieldName, HeaderField, HeaderFields},
     signature::{DomainName, Selector},
 };
 
@@ -69,7 +77,6 @@ impl MessageData {
 
 pub struct Session {
     session_config: Arc<SessionConfig>,
-
     can_skip: bool,
     conn: ConnectionData,
     message: Option<MessageData>,
@@ -123,7 +130,7 @@ impl Session {
         let config = &self.session_config.config;
 
         // convert milter newlines to SMTP CRLF
-        let value = value.replace("\n", "\r\n");
+        let value = util::normalize_to_crlf(&value);
 
         // count and limit amount of header data that can be accumulated (DoS)
         const MAX_HEADER_LEN: usize = 512_000;
@@ -227,10 +234,9 @@ impl Session {
         // Verifiers SHOULD take reasonable steps to ensure that the messages
         // they are processing are valid according to [RFC5322], [RFC2045], and
         // any other relevant message format standards.’
-        if let Err(e) = header::validate_rfc5322(&headers) {
+        if let Err(e) = validate_rfc5322(&headers) {
             // For now, simply log that we are proceeding with an ill-formed header.
             info!("{id}: proceeding with header not conforming to RFC 5322: {e}");
-            // TODO perhaps also check "Sender MUST occur with multi-address From" here?
         }
 
         // A trusted sender is eligible for signing, and is not eligible for
@@ -329,8 +335,7 @@ impl Session {
             self.conn.connection_overrides.get_or_insert_with(|| {
                 get_connection_overrides(self.conn.ip, &self.session_config.config)
             });
-        // TODO delete `.clone()` once repaired version of viadkim published
-        let recipients = &self.message.as_ref().unwrap().recipients.clone();
+        let recipients = &self.message.as_ref().unwrap().recipients;
         let recipient_overrides: ConfigOverrides =
             get_recipient_overrides(recipients, &self.session_config.config);
 
@@ -408,6 +413,97 @@ fn eq_authserv_ids(id1: &str, id2: &str) -> bool {
     }
 
     to_unicode(id1) == to_unicode(id2)
+}
+
+// The header validation utility here allows partial checking for RFC 5322
+// conformance; see DKIM §3.8: ‘Signers and Verifiers SHOULD take reasonable
+// steps to ensure that the messages they are processing are valid according to
+// RFC5322, RFC2045, and any other relevant message format standards.’
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub enum HeaderValidationError {
+    NoSingleDate,
+    NoSingleFrom,
+    MultipleSender,
+    MultipleReplyTo,
+    MultipleTo,
+    MultipleCc,
+    MultipleBcc,
+    MultipleMessageId,
+    MultipleInReplyTo,
+    MultipleReferences,
+    MultipleSubject,
+}
+
+impl Display for HeaderValidationError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::NoSingleDate => write!(f, "not exactly one Date header"),
+            Self::NoSingleFrom => write!(f, "not exactly one From header"),
+            Self::MultipleSender => write!(f, "more than one Sender header"),
+            Self::MultipleReplyTo => write!(f, "more than one Reply-To header"),
+            Self::MultipleTo => write!(f, "more than one To header"),
+            Self::MultipleCc => write!(f, "more than one Cc header"),
+            Self::MultipleBcc => write!(f, "more than one Bcc header"),
+            Self::MultipleMessageId => write!(f, "more than one Message-ID header"),
+            Self::MultipleInReplyTo => write!(f, "more than one In-Reply-To header"),
+            Self::MultipleReferences => write!(f, "more than one References header"),
+            Self::MultipleSubject => write!(f, "more than one Subject header"),
+        }
+    }
+}
+
+impl Error for HeaderValidationError {}
+
+// TODO move validation elsewhere
+
+// Validates the given header according to RFC 5322, 3.6. This only validates
+// the cardinality requirements in the table at the end of section 3.6, not the
+// format of the headers.
+pub fn validate_rfc5322(header: impl AsRef<[HeaderField]>) -> Result<(), HeaderValidationError> {
+    fn count_names(header: &[HeaderField], name: &str) -> usize {
+        header.iter().filter(|(n, _)| *n == name).count()
+    }
+
+    let header = header.as_ref();
+
+    if count_names(header, "Date") != 1 {
+        return Err(HeaderValidationError::NoSingleDate);
+    }
+    if count_names(header, "From") != 1 {
+        return Err(HeaderValidationError::NoSingleFrom);
+    }
+    if count_names(header, "Sender") > 1 {
+        return Err(HeaderValidationError::MultipleSender);
+    }
+    if count_names(header, "Reply-To") > 1 {
+        return Err(HeaderValidationError::MultipleReplyTo);
+    }
+    if count_names(header, "To") > 1 {
+        return Err(HeaderValidationError::MultipleTo);
+    }
+    if count_names(header, "Cc") > 1 {
+        return Err(HeaderValidationError::MultipleCc);
+    }
+    if count_names(header, "Bcc") > 1 {
+        return Err(HeaderValidationError::MultipleBcc);
+    }
+    if count_names(header, "Message-ID") > 1 {
+        return Err(HeaderValidationError::MultipleMessageId);
+    }
+    if count_names(header, "In-Reply-To") > 1 {
+        return Err(HeaderValidationError::MultipleInReplyTo);
+    }
+    if count_names(header, "References") > 1 {
+        return Err(HeaderValidationError::MultipleReferences);
+    }
+    if count_names(header, "Subject") > 1 {
+        return Err(HeaderValidationError::MultipleSubject);
+    }
+
+    // TODO also check "Sender MUST occur with multi-address From" here
+
+    Ok(())
 }
 
 fn is_trusted_sender(id: &str, config: &Config, ip: Option<IpAddr>, authenticated: bool) -> bool {
@@ -610,8 +706,8 @@ async fn delete_auth_results_headers(
 // TODO
 #[cfg(test)]
 mod tests {
-    /*
     use super::*;
+    /*
     use crate::config::SenderEntry;
     use regex::Regex;
 
@@ -647,4 +743,31 @@ mod tests {
         ]);
     }
     */
+
+    #[test]
+    fn validate_rfc5322_ok() {
+        let mut header = vec![
+            (
+                FieldName::new("Date").unwrap(),
+                FieldBody::new(*b" Mon, 22 May 2023 11:59:28 +0200").unwrap(),
+            ),
+            (
+                FieldName::new("From").unwrap(),
+                FieldBody::new(*b" me").unwrap(),
+            ),
+            (
+                FieldName::new("To").unwrap(),
+                FieldBody::new(*b" you").unwrap(),
+            ),
+        ];
+
+        assert_eq!(validate_rfc5322(&header), Ok(()));
+
+        header.push((
+            FieldName::new("fRom").unwrap(),
+            FieldBody::new(*b" me too").unwrap(),
+        ));
+
+        assert_eq!(validate_rfc5322(&header), Err(HeaderValidationError::NoSingleFrom));
+    }
 }

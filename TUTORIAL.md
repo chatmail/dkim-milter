@@ -162,6 +162,12 @@ dig +short rsa.2023._domainkey.example.com. txt
 "v=DKIM1; k=rsa; p=MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAqR9XCFPJhKWt7t4D0nXJrKINF8ZorIliAEV8fyyMjFPNR8tPzjRJw/TvSML6s+034jRIZ10k66k80s1ayGj0TQDy" "iGbiebQanzGz2VNRLeUPow0dBOjQfkuhKuKLmu9xljnuIdT8LEQbBOBk0hr4peUUj8wxk6OuWsF1Fcpis3HEjOnqZn1cPe9sSS43w6ex9PGuhLddWCfgeBmTtMbCwd1MPA0CVTkwD3vG/irkOVYb2o" "0racJ1EMIQD8FjnExJpFFK0QbExT334BVH+tHUPXc7etoiKMKqSETVb0XtQvTSkowE8qXO8IXOxkzW2cZLP+yU5YPSikwoKcY/tJlCYQIDAQAB"
 ```
 
+Look closely at the output: notice how the very large record has been split into
+three character strings. Logically this represents a single string but DNS
+limitations require a large string to be segmented into smaller parts. Again,
+how this needs to be set up depends on the DNS software that you use. But the
+final outcome should look similar to what is shown above.
+
 ## Set up systemd service
 
 Now, we would like to run DKIM Milter as a system service. One easy way to do

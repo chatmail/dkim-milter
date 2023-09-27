@@ -3,7 +3,6 @@ mod common;
 pub use common::*;
 
 use dkim_milter::*;
-use indymilter::MacroStage;
 use indymilter_test::*;
 use log::debug;
 
@@ -89,7 +88,7 @@ Thank you.
     let (actions, status) = conn.eom().await.unwrap();
     assert_eq!(status, Status::Continue);
 
-    debug!("EOM replies: {:?}", &actions.replies);
+    debug!("EOM replies: {:?}", actions);
 
     conn.close().await.unwrap();
 

@@ -294,6 +294,13 @@ impl fmt::Debug for SignedFieldName {
 }
 
 #[derive(Clone, Debug, PartialEq)]
+pub enum SignedFieldNameWithQualifier {
+    Bare(SignedFieldName),
+    Plus(SignedFieldName),
+    Asterisk(SignedFieldName),
+}
+
+#[derive(Clone, Debug, PartialEq)]
 pub enum SignedHeaders {
     Pick(Vec<SignedFieldName>),  // must include From
     PickWithDefault(Vec<SignedFieldName>),  // From stripped (already in default)
@@ -304,7 +311,7 @@ pub enum SignedHeaders {
 pub enum OversignedHeaders {
     Pick(Vec<SignedFieldName>),
     Signed,
-    Exhaustive,
+    Extended,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -374,7 +381,7 @@ impl SigningConfig {
                     }
                 }
             }
-            (OversignedHeaders::Exhaustive, SignedHeaders::All) => {
+            (OversignedHeaders::Extended, SignedHeaders::All) => {
                 for h in &self.default_signed_headers {
                     if self.default_unsigned_headers.contains(h) {
                         return Err("cannot oversign header expressly excluded from signing".into());
@@ -604,7 +611,7 @@ pub struct VerificationConfig {
     pub max_signatures: usize,
     pub min_rsa_key_bits: usize,
     pub reject_failures: RejectFailures,
-    pub required_signed_headers: Vec<SignedFieldName>,
+    pub required_signed_headers: Vec<SignedFieldNameWithQualifier>,
     pub time_tolerance: Duration,
 }
 
@@ -658,7 +665,8 @@ impl Default for VerificationConfig {
             max_signatures: 10,
             min_rsa_key_bits: 1024,
             reject_failures: Default::default(),
-            required_signed_headers: Default::default(),
+            required_signed_headers:
+                vec![SignedFieldNameWithQualifier::Asterisk(SignedFieldName::new("From").unwrap())],
             time_tolerance: Duration::from_secs(30),
         }
     }
@@ -674,7 +682,7 @@ pub struct PartialVerificationConfig {
     pub max_signatures: Option<usize>,
     pub min_rsa_key_bits: Option<usize>,
     pub reject_failures: Option<Arc<RejectFailures>>,
-    pub required_signed_headers: Option<Arc<Vec<SignedFieldName>>>,
+    pub required_signed_headers: Option<Arc<Vec<SignedFieldNameWithQualifier>>>,
     pub time_tolerance: Option<Duration>,
 }
 

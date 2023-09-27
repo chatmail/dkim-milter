@@ -138,9 +138,9 @@ Headers to oversign, that is, sign once more than actually present and signed.
 The given value may be in one of the following formats:
 .BR signed ,
 oversign all headers already selected for signing.
-.BR exhaustive ,
-oversign all headers in
-.BR default_signed_headers ,
+.BR signed-extended ,
+oversign all headers already selected for signing plus all headers configured in
+.BR signed_headers ,
 even if they are not present in the message header and so were not selected for
 signing.
 .IR colon-separated ,
@@ -222,8 +222,8 @@ reject messages without DKIM signature.
 .BR failing ,
 reject messages without a passing DKIM signature.
 .BR author-mismatch ,
-reject messages that don’t have a passing DKIM signature where the author
-declared in the
+reject messages that don’t have a passing DKIM signature where the author domain
+found in the
 .I From
 header matches (that is, is equal to or a subdomain of) the signing domain in
 the signature’s
@@ -242,6 +242,25 @@ example, through an entry in
 .TP
 .BR required_signed_headers " (\fIcolon-separated\fR)"
 The set of headers required to be included in a signature.
+A bare header name requires the header to be included in a signature’s
+.I h=
+tag at least once.
+Appending
+.B +
+to the header name also requires that
+.I all
+instances of that header be signed.
+Appending
+.B *
+to the header name instead removes the requirement that the header be included,
+but if it is, then
+.I all
+included instances must be signed.
+In conformance with RFC\~6376, the header
+.I From
+is always required to be included in a signature independent of this setting.
+The default is
+.BR From* .
 .TP
 .BR time_tolerance " (\fIduration\fR)"
 Time tolerance when evaluating timestamp and expiration in signatures, in order

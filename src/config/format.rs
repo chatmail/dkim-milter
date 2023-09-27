@@ -4,8 +4,8 @@ use crate::config::{
     self,
     model::{
         ConfigOverrides, LogDestination, LogLevel, OperationMode, PartialSigningConfig,
-        PartialVerificationConfig, SenderEntry, SigningSenders, Socket, SyslogFacility,
-        TrustedNetworks,
+        PartialVerificationConfig, SenderEntry, SignedFieldName, SigningSenders, Socket,
+        SyslogFacility, TrustedNetworks,
     },
     params,
     tables::{self, TableError},
@@ -71,6 +71,7 @@ impl Error for ParseConfigError {
             | InvalidNetworkAddress(_)
             | InvalidTrustedNetworks(_)
             | InvalidFieldName(_)
+            | DuplicateFieldName(_)
             | SignedHeadersMissingFrom(_)
             | FromInUnsignedHeaders(_)
             | InvalidHashAlgorithm(_)
@@ -107,6 +108,7 @@ impl Display for ParseConfigError {
             | InvalidNetworkAddress(_)
             | InvalidTrustedNetworks(_)
             | InvalidFieldName(_)
+            | DuplicateFieldName(_)
             | SignedHeadersMissingFrom(_)
             | FromInUnsignedHeaders(_)
             | InvalidHashAlgorithm(_)
@@ -141,6 +143,7 @@ pub enum ParseParamError {
     InvalidNetworkAddress(String),
     InvalidTrustedNetworks(String),
     InvalidFieldName(String),
+    DuplicateFieldName(SignedFieldName),
     SignedHeadersMissingFrom(String),
     FromInUnsignedHeaders(String),
     InvalidHashAlgorithm(String),
@@ -177,6 +180,7 @@ impl Display for ParseParamError {
             Self::InvalidNetworkAddress(s) => write!(f, "invalid network address \"{s}\""),
             Self::InvalidTrustedNetworks(s) => write!(f, "invalid trusted networks \"{s}\""),
             Self::InvalidFieldName(s) => write!(f, "invalid header field name \"{s}\""),
+            Self::DuplicateFieldName(s) => write!(f, "duplicate header field name \"{}\"", s.as_ref()),
             Self::SignedHeadersMissingFrom(_s) => write!(f, "signed headers are missing required header From"),
             Self::FromInUnsignedHeaders(_s) => write!(f, "unsigned headers contain required header From"),
             Self::InvalidHashAlgorithm(s) => write!(f, "invalid hash algorithm \"{s}\""),
@@ -782,7 +786,7 @@ fn parse_verification_config_param(
             config.reject_failures = Some(value.into());
         }
         "required_signed_headers" => {
-            let value = params::parse_field_names(v)?;
+            let value = params::parse_qualified_field_names(v)?;
             config.required_signed_headers = Some(value.into());
         }
         "time_tolerance" => {

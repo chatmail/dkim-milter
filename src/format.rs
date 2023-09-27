@@ -1,6 +1,6 @@
-use bstr::ByteSlice;
 use std::{
     borrow::Cow,
+    cmp,
     error::Error,
     fmt::{self, Display, Formatter},
     net::IpAddr,
@@ -108,13 +108,13 @@ pub fn parse_from_addresses(input: &[u8]) -> Result<Vec<MailAddr>, ParseMailAddr
 }
 
 #[derive(Debug, PartialEq, Eq)]
-pub struct AddrSpec {
+struct AddrSpec {
     local_part: String,
     domain_part: DomainPart,
 }
 
 #[derive(Debug, PartialEq, Eq)]
-pub enum DomainPart {
+enum DomainPart {
     DomainName(String),
     DomainLiteral(String),
 }
@@ -126,8 +126,8 @@ pub enum DomainPart {
 
 // Implementation note: Parsing uses byte slices at first, to allow for
 // non-UTF-8 bytes. However, as soon as stricter validity is required the byte
-// slice will be (partially) converted to UTF-8 using the bstr crate. This
-// approach is really rather complicated, revisit?
+// slice will be (partially) converted to UTF-8. This approach is really rather
+// complicated, revisit?
 
 // RFC 5322, section 3.4
 
@@ -642,11 +642,15 @@ fn is_qtext_loose(c: &u8) -> bool {
 }
 
 fn strip_quoted_pair_bytes(input: &[u8]) -> Option<&[u8]> {
+    fn next_char(input: &[u8]) -> Option<char> {
+        let max = cmp::min(input.len(), 4);
+        next_utf8_chunk(&input[..max]).map(|s| s.chars().next().unwrap())
+    }
+
     let i = input.strip_prefix(b"\\")?;
     // Require valid UTF-8 character on the right-hand side.
-    let (c, n) = bstr::decode_utf8(i);
-    if matches!(c, Some(c) if is_vchar(c) || is_wsp(c)) {
-        return Some(&i[n..]);
+    if let Some(c) = next_char(i).filter(|&c| is_vchar(c) || is_wsp(c)) {
+        return Some(&i[c.len_utf8()..]);
     }
     None
 }
@@ -715,10 +719,21 @@ pub fn strip_suffix<'a>(s: &'a str, suffix: &str) -> &'a str {
 }
 
 fn next_utf8_chunk(input: &[u8]) -> Option<&str> {
-    input.utf8_chunks()
-        .next()
-        .map(|c| c.valid())
-        .filter(|c| !c.is_empty())
+    match str::from_utf8(input) {
+        Ok(s) => {
+            if !s.is_empty() {
+                return Some(s);
+            }
+        }
+        Err(e) => {
+            let i = e.valid_up_to();
+            if i > 0 {
+                return Some(str::from_utf8(&input[..i]).unwrap());
+            }
+        }
+    }
+
+    None
 }
 
 /// Encodes the given string as an RFC 2045 `value`.

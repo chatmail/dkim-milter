@@ -1,8 +1,8 @@
 use crate::{format, verify};
-use std::{borrow::Cow, error::Error, fmt::Write, str};
+use std::{borrow::Cow, error::Error, fmt::Write, str::{self, FromStr}};
 use viadkim::{
     record::DkimKeyRecordError,
-    signature::{DkimSignature, DkimSignatureError},
+    signature::{DomainName, Identity, DkimSignature, DkimSignatureError},
     verifier::{DkimAuthResult, VerificationError, VerificationResult, VerificationStatus},
 };
 
@@ -62,7 +62,7 @@ fn format_resinfo_into_string(
 
     write!(result, ";\n\tdkim={ar}").unwrap();
 
-    if matches!(&sig.key_record, Some(r) if r.is_testing_mode()) {
+    if matches!(&sig.key_record, Some(r) if r.is_testing()) {
         write!(result, " (test mode)").unwrap();
     }
 
@@ -70,18 +70,13 @@ fn format_resinfo_into_string(
         write!(result, " reason={}", format::encode_mime_value(&reason)).unwrap();
     }
 
-    // Note that header.d is *always* included, being the main payload of a DKIM
-    // signature. If it is not known, "unknown" is substituted.
-    let domain = verify::get_domain_from_verification_result(&sig);
-    write!(result, " header.d={}", format::encode_mime_value(&domain)).unwrap();
-
     let (signature, error) = get_signature_or_error_data(&sig);
 
-    format_identity_into_string(result, signature, error);
+    format_identities_into_string(result, signature, error);
 
     // Is there more data to display on an additional line?
     if signature.is_some()
-        || matches!(error, Some(e) if e.algorithm.is_some() || e.selector.is_some())
+        || matches!(error, Some(e) if e.algorithm_str.is_some() || e.selector_str.is_some())
         || prefix.is_some()
     {
         result.push_str("\n\t");
@@ -123,8 +118,6 @@ pub fn auth_results_reason_from_status(status: &VerificationStatus) -> Option<St
                         _ => error.to_string(),
                     })
                 }
-                // TODO drop this mapping once an updated viadkim is available
-                VerificationError::BodyHashMismatch => Some("body hash did not verify".into()),
                 error => Some(match error.source() {
                     Some(e) => e.to_string(),
                     None => error.to_string(),
@@ -148,21 +141,54 @@ fn get_signature_or_error_data(
     }
 }
 
-fn format_identity_into_string(
+// TODO convert domains to U-form
+// TODO is identity displayed properly? see SPF Milter
+fn format_identities_into_string(
     result: &mut String,
     signature: Option<&DkimSignature>,
     error: Option<&DkimSignatureError>,
 ) {
-    // TODO convert domain to U-form
+    // header.d is *always* included, being the main payload of a DKIM
+    // signature. If it is not known, "unknown" is substituted.
+
+    // header.i is synthesised if possible, because of RFC 6376, section 6.1.1:
+    // ‘If the DKIM-Signature header field does not contain the "i=" tag, the
+    // Verifier MUST behave as though the value of that tag were "@d", where "d"
+    // is the value from the "d=" tag.’
+
     if let Some(signature) = signature {
-        // TODO display identity properly, see SPF Milter
+        let domain = &signature.domain;
+
+        write!(result, " header.d={}", domain).unwrap();
+
         if let Some(identity) = &signature.identity {
             write!(result, " header.i={}", identity).unwrap();
+        } else {
+            let id = Identity::from_domain(domain.clone());
+            write!(result, " header.i={}", id).unwrap();
         }
     } else if let Some(error) = error {
-        if let Some(identity) = &error.identity {
-            write!(result, " header.i={}", format::encode_mime_value(identity)).unwrap();
+        let mut valid_domain = None;
+
+        if let Some(domain_str) = &error.domain_str {
+            if let Ok(domain) = DomainName::from_str(domain_str) {
+                let d = valid_domain.insert(domain);
+                write!(result, " header.d={}", d).unwrap();
+            } else {
+                write!(result, " header.d={}", format::encode_mime_value(domain_str)).unwrap();
+            }
+        } else {
+            write!(result, " header.d=unknown").unwrap();
         }
+
+        if let Some(identity_str) = &error.identity_str {
+            write!(result, " header.i={}", format::encode_mime_value(identity_str)).unwrap();
+        } else if let Some(d) = valid_domain {
+            let id = Identity::from_domain(d);
+            write!(result, " header.i={}", id).unwrap();
+        }
+    } else {
+        write!(result, " header.d=unknown").unwrap();
     }
 }
 
@@ -174,7 +200,7 @@ fn format_algorithm_into_string(
     if let Some(signature) = signature {
         write!(result, " header.a={}", signature.algorithm).unwrap();
     } else if let Some(error) = error {
-        if let Some(alg) = &error.algorithm {
+        if let Some(alg) = &error.algorithm_str {
             write!(result, " header.a={}", format::encode_mime_value(alg)).unwrap();
         }
     }
@@ -188,8 +214,31 @@ fn format_selector_into_string(
     if let Some(signature) = signature {
         write!(result, " header.s={}", signature.selector).unwrap();
     } else if let Some(error) = error {
-        if let Some(selector) = &error.selector {
+        if let Some(selector) = &error.selector_str {
             write!(result, " header.s={}", format::encode_mime_value(selector)).unwrap();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use viadkim::signature::DkimSignatureErrorKind;
+
+    #[test]
+    fn format_identities_into_string_ok() {
+        let error = DkimSignatureError {
+            kind: DkimSignatureErrorKind::Utf8Encoding,
+            algorithm_str: None,
+            signature_data_str: None,
+            domain_str: None,
+            identity_str: Some("...".into()),
+            selector_str: None,
+        };
+
+        let mut s = String::new();
+        format_identities_into_string(&mut s, None, Some(&error));
+
+        assert_eq!(s, " header.d=unknown header.i=...");
     }
 }

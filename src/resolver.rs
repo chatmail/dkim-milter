@@ -1,4 +1,4 @@
-use bstr::ByteSlice;
+use crate::util;
 use domain::{
     base::{iana::Rcode, Dname, Rtype},
     rdata::Txt,
@@ -73,7 +73,7 @@ impl LookupTxt for DomainResolver {
                 .map(|r| match r {
                     Ok(record) => {
                         let txt = record.into_data().text();
-                        Ok(normalize_line_breaks(txt))
+                        Ok(normalize_whitespace(txt))
                     }
                     Err(_) => Err(ErrorKind::InvalidData.into()),
                 })
@@ -87,7 +87,7 @@ impl LookupTxt for DomainResolver {
 // There are key records that mistakenly use LF + WSP as line breaks, seen for
 // example at mail._domainkey.circleshop.ch. Be nice and normalise to valid
 // CRLF + WSP. Also trim trailing WSP, which is not allowed after semicolon.
-fn normalize_line_breaks(mut bytes: Vec<u8>) -> Vec<u8> {
+fn normalize_whitespace(mut bytes: Vec<u8>) -> Vec<u8> {
     while let Some(b) = bytes.last() {
         if matches!(b, b' ' | b'\t') {
             bytes.pop();
@@ -96,10 +96,7 @@ fn normalize_line_breaks(mut bytes: Vec<u8>) -> Vec<u8> {
         }
     }
 
-    bstr::join(
-        "\r\n",
-        bytes.split_str("\r\n").flat_map(|b| b.split_str("\n")),
-    )
+    util::normalize_to_crlf(&bytes)
 }
 
 #[cfg(test)]
@@ -107,8 +104,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn normalize_line_breaks_ok() {
+    fn normalize_whitespace_ok() {
         let record = b"v=1;\r\n\tw=2;\n\t;x=3; ".to_vec();
-        assert_eq!(normalize_line_breaks(record), b"v=1;\r\n\tw=2;\r\n\t;x=3;");
+        assert_eq!(normalize_whitespace(record), b"v=1;\r\n\tw=2;\r\n\t;x=3;");
     }
 }

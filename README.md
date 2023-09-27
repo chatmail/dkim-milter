@@ -31,8 +31,8 @@ inspired some choices made here.
 ## Installation
 
 SPF Milter is a [Rust] project. It can be built and/or installed using Cargo.
-**DKIM Milter must be built from source code with `cargo build` for now**
-(initial development; working, but alpha quality).
+**Build DKIM Milter from source code with `cargo build` in order to use the
+current development state** (initial development; working, but alpha quality).
 
 During building and installation the option `--features pre-rfc8301` can be
 specified to revert cryptographic algorithm and key usage back to before [RFC
@@ -101,7 +101,7 @@ This design, with main configuration whose parameters can be overridden with
 some granularity, should be flexible enough to implement many configuration
 requirements.
 
-### Sign/verify decision
+### Sign–verify decision
 
 For all messages passed to DKIM Milter, the decision whether the message should
 undergo verification or signing is made in the following way.

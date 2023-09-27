@@ -3,7 +3,6 @@ mod common;
 pub use common::*;
 
 use dkim_milter::*;
-use indymilter::MacroStage;
 use indymilter_test::*;
 use std::io::ErrorKind;
 use log::debug;
@@ -66,7 +65,7 @@ Goodbye!
     let (actions, status) = conn.eom().await.unwrap();
     assert_eq!(status, Status::Continue);
 
-    debug!("EOM replies: {:?}", &actions.replies);
+    debug!("EOM replies: {:?}", actions);
 
     assert!(actions.has_delete_header("Authentication-Results", 3));
 

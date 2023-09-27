@@ -6,6 +6,7 @@ mod resolver;
 mod session;
 mod verify;
 mod sign;
+mod util;
 
 pub use crate::{
     config::{
@@ -28,10 +29,6 @@ use std::{
 };
 use tokio::sync::mpsc;
 use log::{error, info, LevelFilter, Log, Metadata, Record, SetLoggerError};
-/*
-use tracing::{error, info, Level};
-use tracing_subscriber::{filter::Targets, layer::SubscriberExt, util::SubscriberInitExt};
-*/
 
 /// The DKIM Milter application name.
 pub const MILTER_NAME: &str = "DKIM Milter";
@@ -99,43 +96,6 @@ impl Config {
 }
 
 fn configure_logging(config: &LogConfig) -> Result<(), Box<dyn Error + 'static>> {
-    // TODO `tracing` is simply not ready yet
-    /*
-    let registry = tracing_subscriber::registry();
-
-    let level = match config.log_level {
-        LogLevel::Error => Level::ERROR,
-        LogLevel::Warn => Level::WARN,
-        LogLevel::Info => Level::INFO,
-        LogLevel::Debug => Level::DEBUG,
-    };
-
-    let filter = Targets::new()
-        .with_default(level)
-        // TODO actually, should enable level only for mod dkim_milter; however, then tests don't log
-        // TODO `module_path!` only works if this code is in src/lib.rs
-        // .with_target(module_path!(), level)
-        // TODO during initial development, may enable viadkim trace logging
-        // .with_target("viadkim", Level::TRACE)
-        ;
-
-    match config.log_destination {
-        LogDestination::Journald => {
-            let journald = tracing_journald::layer()?;
-            // TODO this needs https://github.com/tokio-rs/tracing/pull/2347
-            registry.with(journald).with(filter).try_init()?;
-        }
-        LogDestination::Stderr => {
-            let stderr = tracing_subscriber::fmt::layer()
-                .with_target(false)
-                .with_level(false)
-                .without_time()
-                .with_writer(stderr);
-            registry.with(stderr).with(filter).try_init()?;
-        }
-    }
-    */
-
     let level = match config.log_level {
         LogLevel::Error => LevelFilter::Error,
         LogLevel::Warn => LevelFilter::Warn,

@@ -1,7 +1,10 @@
 use crate::{
     auth_results,
     config::{
-        model::{PartialVerificationConfig, RejectFailure, VerificationConfig},
+        model::{
+            PartialVerificationConfig, RejectFailure, SignedFieldNameWithQualifier,
+            VerificationConfig,
+        },
         Config, SessionConfig,
     },
     format::MailAddr,
@@ -12,7 +15,7 @@ use indymilter::{ContextActions, SetErrorReply, Status};
 use log::{debug, info};
 use std::error::Error;
 use viadkim::{
-    header::HeaderFields,
+    header::{FieldName, HeaderFields},
     message_hash::BodyHasherStance,
     signature::DkimSignature,
     verifier::{self, VerificationError, VerificationResult, VerificationStatus},
@@ -43,19 +46,19 @@ impl Verifier {
         let max_signatures = vconfig.max_signatures;
         let min_key_bits = vconfig.min_rsa_key_bits;
         let time_tolerance = vconfig.time_tolerance;
-        let required_signed_headers = vconfig.required_signed_headers.iter()
-            .map(|h| h.as_ref().clone())
-            .collect();
+        let (headers_required_in_signature, headers_forbidden_to_be_unsigned) =
+            make_signed_headers_specs(&vconfig.required_signed_headers);
 
         let config = verifier::Config {
             allow_expired,
             allow_sha1,
             allow_timestamp_in_future,
             forbid_unsigned_content,
+            headers_forbidden_to_be_unsigned,
+            headers_required_in_signature,
             lookup_timeout,
             max_signatures,
             min_key_bits,
-            required_signed_headers,
             time_tolerance,
             ..Default::default()
         };
@@ -115,7 +118,7 @@ impl Verifier {
 
         for sig in &sigs {
             // first, update sig status
-            let is_testing = matches!(&sig.key_record, Some(r) if r.is_testing_mode());
+            let is_testing = matches!(&sig.key_record, Some(r) if r.is_testing());
 
             // DKIM key records in testing mode are treated as passing!
 
@@ -239,6 +242,30 @@ impl Verifier {
     }
 }
 
+fn make_signed_headers_specs(
+    names: &[SignedFieldNameWithQualifier],
+) -> (Vec<FieldName>, Vec<FieldName>) {
+    let mut headers_required_in_signature = vec![];
+    let mut headers_forbidden_to_be_unsigned = vec![];
+
+    for name in names {
+        match name {
+            SignedFieldNameWithQualifier::Bare(name) => {
+                headers_required_in_signature.push(name.as_ref().clone());
+            }
+            SignedFieldNameWithQualifier::Plus(name) => {
+                headers_required_in_signature.push(name.as_ref().clone());
+                headers_forbidden_to_be_unsigned.push(name.as_ref().clone());
+            }
+            SignedFieldNameWithQualifier::Asterisk(name) => {
+                headers_forbidden_to_be_unsigned.push(name.as_ref().clone());
+            }
+        }
+    }
+
+    (headers_required_in_signature, headers_forbidden_to_be_unsigned)
+}
+
 pub fn get_domain_from_verification_result(res: &VerificationResult) -> String {
     // TODO convert to U-form
     match &res.signature {
@@ -247,11 +274,11 @@ pub fn get_domain_from_verification_result(res: &VerificationResult) -> String {
             if let VerificationStatus::Failure(VerificationError::DkimSignatureFormat(e)) =
                 &res.status
             {
-                if let Some(d) = &e.domain {
-                    return d.to_string();
+                if let Some(d) = &e.domain_str {
+                    return d.as_ref().into();
                 }
             }
-            "unknown".to_string()
+            "unknown".into()
         }
     }
 }
@@ -280,13 +307,41 @@ fn make_b_string(r: &VerificationResult) -> Option<String> {
     // Else try to use whatever was salvaged as a string from the b= tag.
     // Careful, this could be any (malicious) thing.
     if let VerificationStatus::Failure(VerificationError::DkimSignatureFormat(e)) = &r.status {
-        // TODO may need to strip whitespace if impl in viadkim changes
-        if let Some(s) = &e.signature_data {
-            return Some(s.as_ref().into());
+        if let Some(s) = &e.signature_data_str {
+            return sanitize_b_tag_value(s).or_else(|| Some(s.as_ref().into()));
         }
     }
 
     None
+}
+
+// TODO revisit: actually might want to strip CRLF for all header.* tags
+// If the b tag string content consists of what looks like (perhaps only
+// incomplete) Base64, then strip whitespace as would usually happen.
+fn sanitize_b_tag_value(s: &str) -> Option<String> {
+    fn is_wsp(c: char) -> bool {
+        c == '\t' || c == ' '
+    }
+    fn is_in_base64_alphabet(c: char) -> bool {
+        c.is_ascii_alphanumeric() || matches!(c, '+' | '/' | '=')
+    }
+
+    let mut result = String::new();
+
+    for (i, mut part) in s.split("\r\n").enumerate() {
+        if i > 0 {
+            part = part.strip_prefix(is_wsp)?;
+        }
+        for c in part.chars() {
+            if is_in_base64_alphabet(c) {
+                result.push(c);
+            } else if !is_wsp(c) {
+                return None;
+            }
+        }
+    }
+
+    Some(result)
 }
 
 // Design note: The purpose of the header.b prefix is identifying a signature
@@ -309,7 +364,7 @@ fn compute_signature_prefixes_internal(
     // no expensive computation happening.
 
     for (this_index, this_str) in sigs {
-        let this_str = match this_str.as_deref() {
+        let this_str = match this_str {
             Some(s) => s,
             None => {
                 // This verification result does not have a b= string.
@@ -341,7 +396,7 @@ fn compute_signature_prefixes_internal(
                 continue;
             }
 
-            let other_str = match other_str.as_deref() {
+            let other_str = match other_str {
                 Some(s) => s,
                 None => continue,
             };
@@ -436,6 +491,15 @@ fn is_author_matched_domain(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sanitize_b_tag_value_ok() {
+        assert_eq!(
+            sanitize_b_tag_value("Ab9\r\n 2/q").as_deref(),
+            Some("Ab92/q")
+        );
+        assert_eq!(sanitize_b_tag_value("invalid\r\n _#!"), None);
+    }
 
     #[test]
     fn compute_signature_prefixes_mixed() {

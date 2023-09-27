@@ -153,8 +153,8 @@ fn get_identifiers(domain: DomainExpr, sender: &MailAddr) -> (DomainName, Option
             };
 
             let identity = Some(Identity {
-                local_part: local_part.map(From::from),
-                domain_part: identity_domain,
+                local_part: local_part.map(Into::into),
+                domain: identity_domain,
             });
 
             (domain, identity)
@@ -259,7 +259,7 @@ fn select_headers(
 
             selection.extend(oversign);
         }
-        OversignedHeaders::Exhaustive => {
+        OversignedHeaders::Extended => {
             let mut seen: HashSet<&FieldName> = HashSet::new();
 
             // first oversign all that have been signed already
@@ -344,13 +344,13 @@ mod tests {
     }
 
     #[test]
-    fn select_headers_pick_and_oversign_exhaustive() {
+    fn select_headers_pick_and_oversign_extended() {
         let headers = make_header_fields(["from", "aa", "bb", "cc", "aa", "dd"]);
 
         let default = header_vec(["From", "To"]);
         let default_unsigned = vec![];
         let signed = SignedHeaders::PickWithDefault(header_vec(["Aa", "Bb", "Ee"]));
-        let oversigned = OversignedHeaders::Exhaustive;
+        let oversigned = OversignedHeaders::Extended;
 
         let selection = select_headers(&headers, &signed, &oversigned, &default, &default_unsigned);
 
@@ -367,7 +367,7 @@ mod tests {
         let default = header_vec(["From", "To"]);
         let default_unsigned = header_vec(["cc", "dd"]);
         let signed = SignedHeaders::All;
-        let oversigned = OversignedHeaders::Exhaustive;
+        let oversigned = OversignedHeaders::Extended;
 
         let selection = select_headers(&headers, &signed, &oversigned, &default, &default_unsigned);
 
