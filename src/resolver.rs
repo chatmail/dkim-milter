@@ -2,13 +2,17 @@ use crate::util;
 use domain::{
     base::{iana::Rcode, Dname, Rtype},
     rdata::Txt,
-    resolv::StubResolver,
+    resolv::{
+        stub::conf::{ResolvConf, ResolvOptions},
+        StubResolver,
+    },
 };
 use std::{
     future::Future,
     io::{self, ErrorKind},
     pin::Pin,
     sync::Arc,
+    time::Duration,
 };
 use viadkim::verifier::LookupTxt;
 
@@ -36,12 +40,24 @@ pub enum Resolver {
 
 #[derive(Clone)]
 pub struct DomainResolver {
-    pub resolver: Arc<StubResolver>,
+    resolver: Arc<StubResolver>,
 }
 
 impl DomainResolver {
-    pub fn new() -> Self {
-        let resolver = Arc::new(StubResolver::new());
+    pub fn new(timeout: Duration) -> Self {
+        let options = ResolvOptions {
+            timeout,
+            ..Default::default()
+        };
+
+        let mut conf = ResolvConf {
+            options,
+            ..Default::default()
+        };
+
+        conf.finalize();
+
+        let resolver = Arc::new(StubResolver::from_conf(conf));
 
         Self { resolver }
     }

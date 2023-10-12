@@ -36,6 +36,8 @@ impl Verifier {
     ) -> Self {
         let config = &session_config.config;
 
+        let lookup_timeout = config.lookup_timeout;
+
         let x = connection_overrides.merged_with(recipient_overrides);
         let vconfig = config.verification_config.merged_with(&x);
 
@@ -43,7 +45,6 @@ impl Verifier {
         let allow_sha1 = vconfig.allow_sha1;
         let allow_timestamp_in_future = vconfig.allow_timestamp_in_future;
         let forbid_unsigned_content = vconfig.forbid_unsigned_content;
-        let lookup_timeout = vconfig.lookup_timeout;
         let max_signatures = vconfig.max_signatures;
         let min_key_bits = vconfig.min_rsa_key_bits;
         let time_tolerance = vconfig.time_tolerance;
@@ -184,7 +185,7 @@ impl Verifier {
             };
 
             info!(
-                "{id}: verified signature from {}: {}{}",
+                "{id}: {}: {}{}",
                 get_domain_from_verification_result(sig),
                 sig.status.to_dkim_auth_result(),
                 comment

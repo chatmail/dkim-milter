@@ -1,7 +1,10 @@
-use dkim_milter::{CliOptions, Config, LogDestination, LogLevel, Socket};
+use dkim_milter::{CliOptions, Config, LogDestination, LogLevel, LookupFuture, Socket, StubConfig};
 use std::{
-    env, io,
+    env,
+    error::Error,
+    io,
     net::{Ipv4Addr, SocketAddr},
+    sync::Once,
     time::Duration,
 };
 use tokio::{
@@ -28,6 +31,34 @@ pub fn default_cli_options() -> CliOptions {
             ..Default::default()
         }
     }
+}
+
+// Because each file in tests/ is compiled as its own crate, each integration
+// test file will have its own `Once` ensuring logging for those tests in that
+// file is installed only once.
+static INIT_LOG: Once = Once::new();
+
+pub async fn read_config(opts: CliOptions) -> Result<Config, Box<dyn Error + 'static>> {
+    let config = StubConfig::read(opts).await?;
+
+    INIT_LOG.call_once(|| config.install_static_logger().unwrap());
+
+    let config = config.read_fully().await?;
+
+    Ok(config)
+}
+
+pub async fn read_config_with_lookup(
+    opts: CliOptions,
+    lookup: impl Fn(&str) -> LookupFuture + Send + Sync + 'static,
+) -> Result<Config, Box<dyn Error + 'static>> {
+    let config = StubConfig::read(opts).await?;
+
+    INIT_LOG.call_once(|| config.install_static_logger().unwrap());
+
+    let config = config.read_fully_with_lookup(lookup).await?;
+
+    Ok(config)
 }
 
 pub struct DkimMilter {

@@ -1,9 +1,16 @@
 use crate::{format, verify};
-use std::{borrow::Cow, error::Error, fmt::Write, str::{self, FromStr}};
+use std::{
+    borrow::Cow,
+    error::Error,
+    fmt::Write,
+    str::{self, FromStr},
+};
 use viadkim::{
     record::DkimKeyRecordError,
-    signature::{DomainName, Identity, DkimSignature, DkimSignatureError},
-    verifier::{DkimAuthResult, VerificationError, VerificationResult, VerificationStatus},
+    signature::{DkimSignature, DkimSignatureError, DomainName, Identity},
+    verifier::{
+        DkimAuthResult as DkimResult, VerificationError, VerificationResult, VerificationStatus,
+    },
 };
 
 // TODO a few things were copied from SPF Milter, think about consolidating later
@@ -40,7 +47,7 @@ pub fn assemble_auth_results(authserv_id: &str, sigs: Vec<VerificationResult>) -
     write!(result, " {}", format::encode_mime_value(authserv_id)).unwrap();
 
     if sigs.is_empty() {
-        let ar = DkimAuthResult::None;
+        let ar = DkimResult::None;
         write!(result, "; dkim={ar}").unwrap();
     } else {
         let signature_prefixes = verify::compute_signature_prefixes(&sigs);

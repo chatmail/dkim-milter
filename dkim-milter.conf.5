@@ -68,6 +68,9 @@ The destination for log messages.
 .BR log_level " (" error " | " warn " | " info " | " debug )
 The minimum severity level of messages to log.
 .TP
+.BR lookup_timeout " (\fIduration\fR)"
+Maximum time to allow when querying for DKIM public key records.
+.TP
 .BR mode " (" auto " | " sign " | " verify )
 The milter’s operating mode.
 .TP
@@ -210,9 +213,6 @@ Whether to evaluate signatures with a timestamp in the future as passing.
 .BR forbid_unsigned_content " (\fIboolean\fR)"
 Whether to evaluate signatures that don’t cover the entire message body content
 as passing.
-.TP
-.BR lookup_timeout " (\fIduration\fR)"
-Maximum time to allow when querying for DKIM public key records.
 .TP
 .BR max_signatures " (\fIinteger\fR)"
 Maximum number of signatures to verify in a message.

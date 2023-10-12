@@ -2,7 +2,6 @@ mod common;
 
 pub use common::*;
 
-use dkim_milter::*;
 use indymilter_test::*;
 use std::io::ErrorKind;
 use log::debug;
@@ -12,7 +11,7 @@ async fn delete_auth_results() {
     let mut opts = default_cli_options();
     opts.config_file = Some("tests/delete_auth_results/dkim-milter.conf".into());
 
-    let config = Config::read_with_lookup(opts, |_| {
+    let config = read_config_with_lookup(opts, |_| {
         Box::pin(async { Err(ErrorKind::NotFound.into()) })
     })
     .await
@@ -33,7 +32,7 @@ async fn delete_auth_results() {
     let status = conn.rcpt(["<you@example.com>"]).await.unwrap();
     assert_eq!(status, Status::Continue);
 
-    conn.macros(MacroStage::Data, [("i", "1234567ABC")]).await.unwrap();
+    conn.macros(MacroStage::Data, [("i", "12345ABC")]).await.unwrap();
 
     let status = conn.header("Authentication-Results", "\
 (different authserv-id:) myhost.org

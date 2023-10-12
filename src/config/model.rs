@@ -607,7 +607,6 @@ pub struct VerificationConfig {
     pub allow_sha1: bool,
     pub allow_timestamp_in_future: bool,
     pub forbid_unsigned_content: bool,
-    pub lookup_timeout: Duration,
     pub max_signatures: usize,
     pub min_rsa_key_bits: usize,
     pub reject_failures: RejectFailures,
@@ -630,9 +629,6 @@ impl VerificationConfig {
         }
         if let Some(value) = overrides.forbid_unsigned_content {
             config.forbid_unsigned_content = value;
-        }
-        if let Some(value) = overrides.lookup_timeout {
-            config.lookup_timeout = value;
         }
         if let Some(value) = overrides.max_signatures {
             config.max_signatures = value;
@@ -661,7 +657,6 @@ impl Default for VerificationConfig {
             allow_sha1: false,
             allow_timestamp_in_future: false,
             forbid_unsigned_content: false,
-            lookup_timeout: Duration::from_secs(10),
             max_signatures: 10,
             min_rsa_key_bits: 1024,
             reject_failures: Default::default(),
@@ -678,7 +673,6 @@ pub struct PartialVerificationConfig {
     pub allow_sha1: Option<bool>,
     pub allow_timestamp_in_future: Option<bool>,
     pub forbid_unsigned_content: Option<bool>,
-    pub lookup_timeout: Option<Duration>,
     pub max_signatures: Option<usize>,
     pub min_rsa_key_bits: Option<usize>,
     pub reject_failures: Option<Arc<RejectFailures>>,
@@ -693,7 +687,6 @@ impl PartialVerificationConfig {
             allow_sha1: overrides.allow_sha1.or(self.allow_sha1),
             allow_timestamp_in_future: overrides.allow_timestamp_in_future.or(self.allow_timestamp_in_future),
             forbid_unsigned_content: overrides.forbid_unsigned_content.or(self.forbid_unsigned_content),
-            lookup_timeout: overrides.lookup_timeout.or(self.lookup_timeout),
             max_signatures: overrides.max_signatures.or(self.max_signatures),
             min_rsa_key_bits: overrides.min_rsa_key_bits.or(self.min_rsa_key_bits),
             reject_failures: overrides.reject_failures.as_ref()
@@ -718,9 +711,6 @@ impl PartialVerificationConfig {
         }
         if let Some(value) = other.forbid_unsigned_content {
             self.forbid_unsigned_content = Some(value);
-        }
-        if let Some(value) = other.lookup_timeout {
-            self.lookup_timeout = Some(value);
         }
         if let Some(value) = other.max_signatures {
             self.max_signatures = Some(value);
@@ -753,9 +743,6 @@ impl PartialVerificationConfig {
         }
         if let Some(value) = self.forbid_unsigned_content {
             config.forbid_unsigned_content = value;
-        }
-        if let Some(value) = self.lookup_timeout {
-            config.lookup_timeout = value;
         }
         if let Some(value) = self.max_signatures {
             config.max_signatures = value;

@@ -2,17 +2,16 @@ mod common;
 
 pub use common::*;
 
-use dkim_milter::*;
 use indymilter_test::*;
-use std::io::ErrorKind;
 use log::debug;
+use std::io::ErrorKind;
 
 #[tokio::test]
 async fn basic_verify_ed25519() {
     let mut opts = default_cli_options();
     opts.config_file = Some("tests/verify_ed25519/dkim-milter.conf".into());
 
-    let config = Config::read_with_lookup(opts, |s| match s {
+    let config = read_config_with_lookup(opts, |s| match s {
         "sel1._domainkey.gluet.ch." => Box::pin(async {
             Ok(vec![
                 Ok(b"v=DKIM1; un=usable".to_vec()),
@@ -32,8 +31,7 @@ async fn basic_verify_ed25519() {
         .await
         .unwrap();
 
-    let status = conn
-        .connect("client.gluet.ch", [123, 123, 123, 123])
+    let status = conn.connect("client.gluet.ch", [123, 123, 123, 123])
         .await
         .unwrap();
     assert_eq!(status, Status::Continue);
@@ -44,16 +42,16 @@ async fn basic_verify_ed25519() {
     let status = conn.rcpt(["<you@example.com>"]).await.unwrap();
     assert_eq!(status, Status::Continue);
 
-    conn.macros(MacroStage::Data, [("i", "1234567ABC")]).await.unwrap();
+    conn.macros(MacroStage::Data, [("i", "12345ABC")]).await.unwrap();
 
     let status = conn
         .header(
             "DKIM-Signature",
             "\
 v=1; d=gluet.ch; s=sel1; a=ed25519-sha256; t=1683290057;
-	h=Subject:To:From:Date; bh=TPLZoO7LI/6wMUlqqQgxYBvNapYR50Z8yEvX4m9FcFA=; b=SS
-	lQlojiI41NdfofRli7WSo9azvPiZD9BrE99HeUzUn6MVFhuP8tF7vAznp+k8SYaBo8pWwICfaXo8N
-	PKCekAA==",
+\th=Subject:To:From:Date; bh=TPLZoO7LI/6wMUlqqQgxYBvNapYR50Z8yEvX4m9FcFA=; b=SS
+\tlQlojiI41NdfofRli7WSo9azvPiZD9BrE99HeUzUn6MVFhuP8tF7vAznp+k8SYaBo8pWwICfaXo8N
+\tPKCekAA==",
         )
         .await
         .unwrap();

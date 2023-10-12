@@ -2,7 +2,6 @@ mod common;
 
 pub use common::*;
 
-use dkim_milter::*;
 use indymilter_test::*;
 use log::debug;
 
@@ -11,7 +10,7 @@ async fn basic_sign_both() {
     let mut opts = default_cli_options();
     opts.config_file = Some("tests/sign_both/dkim-milter.conf".into());
 
-    let config = Config::read(opts).await.unwrap();
+    let config = read_config(opts).await.unwrap();
 
     let milter = DkimMilter::spawn(config).await.unwrap();
 
@@ -28,7 +27,7 @@ async fn basic_sign_both() {
     let status = conn.rcpt(["<postfix-users@postfix.org>"]).await.unwrap();
     assert_eq!(status, Status::Continue);
 
-    conn.macros(MacroStage::Data, [("i", "1234567ABC")]).await.unwrap();
+    conn.macros(MacroStage::Data, [("i", "12345ABC")]).await.unwrap();
 
     let status = conn.header("Date", "Fri, 18 Nov 2022 13:02:55 +0000").await.unwrap();
     assert_eq!(status, Status::Continue);

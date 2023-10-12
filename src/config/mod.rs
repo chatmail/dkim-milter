@@ -24,6 +24,7 @@ use std::{
     io,
     path::{Path, PathBuf},
     sync::Arc,
+    time::Duration,
 };
 
 pub const DEFAULT_CONFIG_FILE: &str = match option_env!("DKIM_MILTER_CONFIG_FILE") {
@@ -52,7 +53,7 @@ pub struct SessionConfig {
 
 impl SessionConfig {
     pub fn new(config: Config) -> Self {
-        let resolver = Resolver::Live(DomainResolver::new());
+        let resolver = Resolver::Live(DomainResolver::new(config.lookup_timeout));
         Self { config, resolver }
     }
 
@@ -120,16 +121,16 @@ impl From<ValidationError> for ConfigErrorKind {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct LogConfig {
     pub log_destination: LogDestination,
     pub log_level: LogLevel,
     pub syslog_facility: SyslogFacility,
 }
 
-// preliminary, loose reading of LogConfig only
+// preliminary reading of LogConfig only, also returns config file content
 impl LogConfig {
-    pub async fn read(opts: &CliOptions) -> Result<Self, ConfigError> {
+    pub async fn read(opts: &CliOptions) -> Result<(Self, String), ConfigError> {
         format::read_log_config(opts).await
     }
 }
@@ -140,6 +141,7 @@ pub struct Config {
     pub delete_incoming_authentication_results: bool,
     pub dry_run: bool,
     pub log_config: LogConfig,
+    pub lookup_timeout: Duration,
     pub mode: OpMode,
     pub recipient_overrides: Option<OverrideEntries>,
     pub require_envelope_sender_match: bool,
@@ -152,6 +154,14 @@ pub struct Config {
 }
 
 impl Config {
+    pub async fn read_with_log_config(
+        opts: &CliOptions,
+        log_config: LogConfig,
+        main_config_file_content: &str,
+    ) -> Result<Self, ConfigError> {
+        format::read_config_with_log_config(opts, log_config, main_config_file_content).await
+    }
+
     pub async fn read(opts: &CliOptions) -> Result<Self, ConfigError> {
         format::read_config(opts).await
     }
@@ -166,6 +176,7 @@ impl fmt::Debug for Config {
             .field("delete_incoming_authentication_results", &self.delete_incoming_authentication_results)
             .field("dry_run", &self.dry_run)
             .field("log_config", &self.log_config)
+            .field("lookup_timeout", &self.lookup_timeout)
             .field("mode", &self.mode)
             .field("recipient_overrides", &self.recipient_overrides)
             .field("require_envelope_sender_match", &self.require_envelope_sender_match)

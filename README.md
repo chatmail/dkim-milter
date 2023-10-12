@@ -1,11 +1,18 @@
 # DKIM Milter
 
-### 🚧
+🚧 🚧 🚧
 
-### *in development*
+***in development***
 
-### 🏗
+*Status notice: alpha, in development – but feature-complete. All planned
+features for an initial release are available. Lots of
+polishing/renaming/pondering, documenting, testing etc. still to be done,
+feedback welcome.*
 
+🏗 🏗 🏗
+
+<br>
+<br>
 <br>
 
 DKIM Milter is a milter application that signs or verifies email messages using
@@ -81,8 +88,8 @@ included TUTORIAL document.
 
 ### Design
 
-The configuration is currently entirely file-based. **In the future, other data
-sources may be added.**
+The configuration is currently entirely file-based. In the future, other data
+sources such as an SQL database may be added.
 
 The configuration consists at the minimum of the main configuration file
 `dkim-milter.conf`. The main configuration file contains global settings.
@@ -132,9 +139,7 @@ procedure) can also be configured with the `mode` parameter.
 ### Signing senders
 
 Signing configuration is set up through two configuration parameters pointing to
-table-like files. **In the future, support for other data sources such as SQL
-databases may be added.** These parameters are `signing_senders` and
-`signing_keys`.
+table-like files. These parameters are `signing_senders` and `signing_keys`.
 
 ```
 signing_senders = /path/to/signing_senders_file
@@ -190,7 +195,7 @@ example.com           .             ...
 The signing senders table is also where the *signing identity*, that is the *i=*
 tag in the generated signature is configured: By default, signatures do not
 include the signing identity; use of the `@` character in the domain column
-enables the signing identity. **Design being explored.**
+enables the signing identity.
 
 ```
 # Sender expression   Domain/Identity   ...

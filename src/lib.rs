@@ -1,26 +1,39 @@
+//! The DKIM Milter application library.
+//!
+//! This library was published to facilitate integration testing of the [DKIM
+//! Milter application][DKIM Milter]. No backwards compatibility guarantees are
+//! made for the public API in this library. Please look into the application
+//! instead.
+//!
+//! [DKIM Milter]: https://crates.io/crates/dkim-milter
+
 mod auth_results;
 mod callbacks;
 mod config;
 mod format;
 mod resolver;
 mod session;
-mod verify;
 mod sign;
 mod util;
+mod verify;
 
 pub use crate::{
     config::{
         model::{
             LogDestination, LogLevel, ParseLogDestinationError, ParseLogLevelError,
-            ParseSocketError, Socket,
+            ParseSocketError, ParseSyslogFacilityError, Socket, SyslogFacility,
         },
-        CliOptions, LogConfig, SessionConfig,
+        CliOptions,
     },
     resolver::LookupFuture,
 };
 
-use crate::resolver::MockLookupTxt;
+use crate::{
+    config::{LogConfig, SessionConfig},
+    resolver::MockLookupTxt,
+};
 use indymilter::IntoListener;
+use log::{error, info, LevelFilter, Log, Metadata, Record, SetLoggerError};
 use std::{
     error::Error,
     future::Future,
@@ -28,7 +41,6 @@ use std::{
     sync::{Arc, RwLock},
 };
 use tokio::sync::mpsc;
-use log::{error, info, LevelFilter, Log, Metadata, Record, SetLoggerError};
 
 /// The DKIM Milter application name.
 pub const MILTER_NAME: &str = "DKIM Milter";
@@ -36,14 +48,55 @@ pub const MILTER_NAME: &str = "DKIM Milter";
 /// The DKIM Milter version string.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
+/// Preliminary, partially read configuration, with logger not yet installed.
+pub struct StubConfig {
+    opts: CliOptions,
+    log_config: LogConfig,
+    config_file_content: String,
+}
+
+impl StubConfig {
+    pub async fn read(opts: CliOptions) -> Result<Self, Box<dyn Error + 'static>> {
+        let (log_config, config_file_content) = match LogConfig::read(&opts).await {
+            Ok(config) => config,
+            Err(e) => return Err(Box::new(e)),
+        };
+
+        Ok(Self {
+            opts,
+            log_config,
+            config_file_content,
+        })
+    }
+
+    pub fn install_static_logger(&self) -> Result<(), Box<dyn Error + 'static>> {
+        configure_logging(&self.log_config)?;
+        Ok(())
+    }
+
+    pub async fn read_fully(self) -> Result<Config, Box<dyn Error + 'static>> {
+        let StubConfig { opts, log_config, config_file_content } = self;
+        Config::read_fully(opts, log_config, &config_file_content, None).await
+    }
+
+    pub async fn read_fully_with_lookup(
+        self,
+        lookup: impl Fn(&str) -> LookupFuture + Send + Sync + 'static,
+    ) -> Result<Config, Box<dyn Error + 'static>> {
+        let StubConfig { opts, log_config, config_file_content } = self;
+        let lookup = Arc::new(lookup);
+        Config::read_fully(opts, log_config, &config_file_content, Some(lookup)).await
+    }
+}
+
 pub struct Config {
     cli_opts: CliOptions,
     config: config::Config,
     mock_resolver: Option<MockLookupTxt>,
 }
 
-// important: Config::read is stateful, as it installs a global tracing subscriber on first use;
-// this subscriber is active for the rest of the program!
+// important: Config::read is stateful, as it installs a global logger on first use;
+// this logger is active for the rest of the program
 impl Config {
     pub async fn read(opts: CliOptions) -> Result<Self, Box<dyn Error + 'static>> {
         Self::read_internal(opts, None).await
@@ -61,25 +114,35 @@ impl Config {
         opts: CliOptions,
         mock_resolver: Option<Arc<dyn Fn(&str) -> LookupFuture + Send + Sync>>,
     ) -> Result<Self, Box<dyn Error + 'static>> {
-        // read subset of config first, to configure logging only
-        let log_config = match LogConfig::read(&opts).await {
-            Ok(config) => config,
-            Err(e) => return Err(Box::new(e)),
-        };
+        let config = StubConfig::read(opts).await?;
 
-        configure_logging(&log_config)?;
+        config.install_static_logger()?;
 
-        // logging now available; from here on, use logging via tracing macros
+        // logging now available; from here on, use logging via log macros
 
-        // then actually read whole configuration
-        let config = match config::Config::read(&opts).await {
+        let StubConfig { opts, log_config, config_file_content } = config;
+
+        Self::read_fully(opts, log_config, &config_file_content, mock_resolver).await
+    }
+
+    async fn read_fully(
+        opts: CliOptions,
+        log_config: LogConfig,
+        config_file_content: &str,
+        mock_resolver: Option<Arc<dyn Fn(&str) -> LookupFuture + Send + Sync>>,
+    ) -> Result<Self, Box<dyn Error + 'static>> {
+        let config = match config::Config::read_with_log_config(
+            &opts,
+            log_config,
+            config_file_content,
+        )
+        .await
+        {
             Ok(config) => config,
             Err(e) => {
-                // dbg!(&e);
                 return Err(Box::new(e));
             }
         };
-        // dbg!(&config);
 
         let mock_resolver = mock_resolver.map(|r| MockLookupTxt { mock_resolver: r });
 

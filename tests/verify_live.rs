@@ -2,7 +2,6 @@ mod common;
 
 pub use common::*;
 
-use dkim_milter::*;
 use indymilter_test::*;
 use log::debug;
 
@@ -12,7 +11,7 @@ async fn verify_live() {
     let mut opts = default_cli_options();
     opts.config_file = Some("tests/verify_live/dkim-milter.conf".into());
 
-    let config = Config::read(opts).await.unwrap();
+    let config = read_config(opts).await.unwrap();
 
     let milter = DkimMilter::spawn(config).await.unwrap();
 
@@ -29,19 +28,19 @@ async fn verify_live() {
     let status = conn.rcpt(["<postfix-users@postfix.org>"]).await.unwrap();
     assert_eq!(status, Status::Continue);
 
-    conn.macros(MacroStage::Data, [("i", "1234567ABC")]).await.unwrap();
+    conn.macros(MacroStage::Data, [("i", "12345ABC")]).await.unwrap();
 
     let status = conn.header("DKIM-Signature", "\
 v=1; a=rsa-sha256; c=relaxed/simple; d=gluet.ch; s=2020;
-	t=1672918473; x=1673350473;
-	bh=ClG2e7tISzJYrrW94FA6IzY2FsIkk9yxZN1eIC8Sthc=;
-	h=Date:From:To:Subject:From;
-	b=sJ1zOxhZor4mD/ZS6ykGu4ELt+F3Hc9O5KooeHl3vIo+5+gzyJQddGHL6FMXuzRR7
-	 6P2RIBwERuhbECpwnlTXkMPeUdAlgszR0/EbUTLrAkZVM7oYbGOzUezg3Z3jIFPDA8
-	 N1FbUr1KnrKFUtIYJ4I/c9mD7ncvH9lUetInpcfpVPmnc2jzAi4gUXnwb6/kjtiAgD
-	 mn4cEKUwV6l81G8B/uqAFZoqX+hcG2TWr14/y1h5pX0eyq0zHD5QKecfLG0sRwE3jk
-	 cKVpj/ag6ICKdM4Vp2GfaC6DcOs7f2lEINcZQFVr1ZIgiVDunnlS+ORlZFSoNEM6jj
-	 GjmlJg7h3fbRg==").await.unwrap();
+\tt=1672918473; x=1673350473;
+\tbh=ClG2e7tISzJYrrW94FA6IzY2FsIkk9yxZN1eIC8Sthc=;
+\th=Date:From:To:Subject:From;
+\tb=sJ1zOxhZor4mD/ZS6ykGu4ELt+F3Hc9O5KooeHl3vIo+5+gzyJQddGHL6FMXuzRR7
+\t 6P2RIBwERuhbECpwnlTXkMPeUdAlgszR0/EbUTLrAkZVM7oYbGOzUezg3Z3jIFPDA8
+\t N1FbUr1KnrKFUtIYJ4I/c9mD7ncvH9lUetInpcfpVPmnc2jzAi4gUXnwb6/kjtiAgD
+\t mn4cEKUwV6l81G8B/uqAFZoqX+hcG2TWr14/y1h5pX0eyq0zHD5QKecfLG0sRwE3jk
+\t cKVpj/ag6ICKdM4Vp2GfaC6DcOs7f2lEINcZQFVr1ZIgiVDunnlS+ORlZFSoNEM6jj
+\t GjmlJg7h3fbRg==").await.unwrap();
     assert_eq!(status, Status::Continue);
 
     // plus 1 broken sig:
