@@ -16,6 +16,8 @@ use std::{
 };
 use viadkim::verifier::LookupTxt;
 
+pub type LookupFuture = Pin<Box<dyn Future<Output = io::Result<Vec<io::Result<Vec<u8>>>>> + Send>>;
+
 #[derive(Clone)]
 pub struct MockLookupTxt {
     pub mock_resolver: Arc<dyn Fn(&str) -> LookupFuture + Send + Sync>,
@@ -30,8 +32,6 @@ impl LookupTxt for MockLookupTxt {
         Box::pin(async move { (self.mock_resolver)(&domain).await })
     }
 }
-
-pub type LookupFuture = Pin<Box<dyn Future<Output = io::Result<Vec<io::Result<Vec<u8>>>>> + Send>>;
 
 pub enum Resolver {
     Live(DomainResolver),

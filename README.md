@@ -13,7 +13,6 @@ feedback welcome.*
 
 <br>
 <br>
-<br>
 
 DKIM Milter is a milter application that signs or verifies email messages using
 the *DomainKeys Identified Mail* (DKIM) protocol. It is meant to be integrated
