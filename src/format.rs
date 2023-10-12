@@ -24,99 +24,61 @@ impl Display for MailAddr {
 }
 
 #[derive(Debug, PartialEq, Eq)]
-pub enum ParseMailAddrError {
-    Syntax,
-    InvalidDomainPart,
-    DomainLiteral,
-}
+pub struct ParseAddrSpecError;
 
-impl Error for ParseMailAddrError {}
+impl Error for ParseAddrSpecError {}
 
-impl Display for ParseMailAddrError {
+impl Display for ParseAddrSpecError {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Syntax => write!(f, "failed to parse mailbox"),
-            Self::InvalidDomainPart => write!(f, "failed to parse mailbox domain"),
-            Self::DomainLiteral => write!(f, "mailbox domain is literal"),
-        }
+        write!(f, "failed to parse mailbox")
     }
 }
 
 // RFC 5322, section 3.6.2
 
 // sender = "Sender:" mailbox CRLF
-pub fn parse_sender_address(input: &[u8]) -> Result<MailAddr, ParseMailAddrError> {
-    let (mailbox, rest) = parse_mailbox(input).ok_or(ParseMailAddrError::Syntax)?;
+pub fn parse_sender_address(input: &[u8]) -> Result<AddrSpec, ParseAddrSpecError> {
+    let (mailbox, rest) = parse_mailbox(input).ok_or(ParseAddrSpecError)?;
 
     if !rest.is_empty() {
-        return Err(ParseMailAddrError::Syntax);
+        return Err(ParseAddrSpecError);
     }
 
-    match mailbox.domain_part {
-        DomainPart::DomainName(s) => {
-            let domain = DomainName::new(s).map_err(|_| ParseMailAddrError::InvalidDomainPart)?;
-            Ok(MailAddr {
-                local_part: mailbox.local_part,
-                domain,
-            })
-        }
-        DomainPart::DomainLiteral(s) => {
-            let _ = IpAddr::from_str(&s).map_err(|_| ParseMailAddrError::InvalidDomainPart)?;
-            Err(ParseMailAddrError::DomainLiteral)
-        }
-    }
+    Ok(mailbox)
 }
 
 // from = "From:" mailbox-list CRLF
-pub fn parse_from_addresses(input: &[u8]) -> Result<Vec<MailAddr>, ParseMailAddrError> {
-    let (mailboxes, rest) = parse_mailboxes(input).ok_or(ParseMailAddrError::Syntax)?;
+pub fn parse_from_addresses(input: &[u8]) -> Result<Vec<AddrSpec>, ParseAddrSpecError> {
+    let (mailboxes, rest) = parse_mailboxes(input).ok_or(ParseAddrSpecError)?;
 
     if !rest.is_empty() {
-        return Err(ParseMailAddrError::Syntax);
+        return Err(ParseAddrSpecError);
     }
 
-    // Step through the (one or more) mailboxes: invalid domain-parts of both
-    // kinds are treated as an error result; domain literals are ignored if
-    // there are other valid domains.
-
-    let mut addrs = vec![];
-    let mut literal_error = None;
-
-    for mailbox in mailboxes {
-        match mailbox.domain_part {
-            DomainPart::DomainName(s) => {
-                let domain = DomainName::new(s).map_err(|_| ParseMailAddrError::InvalidDomainPart)?;
-                addrs.push(MailAddr {
-                    local_part: mailbox.local_part,
-                    domain,
-                });
-            }
-            DomainPart::DomainLiteral(s) => {
-                let _ = IpAddr::from_str(&s).map_err(|_| ParseMailAddrError::InvalidDomainPart)?;
-                literal_error = Some(ParseMailAddrError::DomainLiteral);
-            }
-        }
-    }
-
-    if addrs.is_empty() {
-        if let Some(error) = literal_error {
-            return Err(error);
-        }
-    }
-
-    Ok(addrs)
+    Ok(mailboxes)
 }
 
-#[derive(Debug, PartialEq, Eq)]
-struct AddrSpec {
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AddrSpec {
     local_part: String,
     domain_part: DomainPart,
 }
 
-#[derive(Debug, PartialEq, Eq)]
-enum DomainPart {
-    DomainName(String),
-    DomainLiteral(String),
+impl AddrSpec {
+    pub fn into_mail_addr(self) -> Option<MailAddr> {
+        match self {
+            Self { local_part, domain_part: DomainPart::DomainName(domain) } => {
+                Some(MailAddr { local_part, domain })
+            }
+            _ => None,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum DomainPart {
+    DomainName(DomainName),
+    DomainLiteral(IpAddr),
 }
 
 // Design note: Considerable effort is spent to allow non-UTF-8 bytes in certain
@@ -246,9 +208,11 @@ fn parse_addr_spec(input: &str) -> Option<(AddrSpec, &str)> {
 
     let (domain_part, rest) = if let Some(rest) = strip_dot_atom(s) {
         let domain = strip_suffix(s, rest);
-        (DomainPart::DomainName(domain.into()), rest)
+        let domain = DomainName::new(domain).ok()?;
+        (DomainPart::DomainName(domain), rest)
     } else if let Some((domain_literal, rest)) = parse_domain_literal(s) {
-        (DomainPart::DomainLiteral(domain_literal.into()), rest)
+        let ip = IpAddr::from_str(domain_literal).ok()?;
+        (DomainPart::DomainLiteral(ip), rest)
     } else {
         return None;
     };
@@ -803,18 +767,21 @@ mod tests {
     fn parse_sender_address_ok() {
         assert_eq!(
             parse_sender_address(b" ( x(\xfa)) hello@example.com(z) "),
-            Ok(MailAddr {
+            Ok(AddrSpec {
                 local_part: "hello".to_owned(),
-                domain: DomainName::new("example.com").unwrap(),
+                domain_part: DomainPart::DomainName(DomainName::new("example.com").unwrap()),
             })
         );
         assert_eq!(
             parse_sender_address(b" ( x(\xfa)) hello@example.com(z) trailing"),
-            Err(ParseMailAddrError::Syntax)
+            Err(ParseAddrSpecError)
         );
         assert_eq!(
             parse_sender_address(b" ( x(\xfa)) hello@[2.3.4.5] "),
-            Err(ParseMailAddrError::DomainLiteral)
+            Ok(AddrSpec {
+                local_part: "hello".to_owned(),
+                domain_part: DomainPart::DomainLiteral(IpAddr::from([2, 3, 4, 5])),
+            })
         );
     }
 
@@ -822,14 +789,14 @@ mod tests {
     fn parse_from_addresses_ok() {
         assert_eq!(
             parse_from_addresses(b"  (all right:)\t \"let's see\" <does@this.work> "),
-            Ok(vec![MailAddr {
+            Ok(vec![AddrSpec {
                 local_part: "does".to_owned(),
-                domain: DomainName::new("this.work").unwrap(),
+                domain_part: DomainPart::DomainName(DomainName::new("this.work").unwrap()),
             }])
         );
         assert_eq!(
             parse_from_addresses(b"  (all right:)\t \"let's see\" <does@this.1213121> "),
-            Err(ParseMailAddrError::InvalidDomainPart)
+            Err(ParseAddrSpecError)
         );
     }
 
@@ -841,7 +808,7 @@ mod tests {
             Some((
                 AddrSpec {
                     local_part: "ruedi".into(),
-                    domain_part: DomainPart::DomainName("go".into())
+                    domain_part: DomainPart::DomainName(DomainName::new("go").unwrap()),
                 },
                 &b""[..]
             ))
@@ -855,7 +822,7 @@ mod tests {
             Some((
                 AddrSpec {
                     local_part: "me".into(),
-                    domain_part: DomainPart::DomainName("what.com".into())
+                    domain_part: DomainPart::DomainName(DomainName::new("what.com").unwrap()),
                 },
                 ""
             ))
@@ -865,17 +832,17 @@ mod tests {
             Some((
                 AddrSpec {
                     local_part: "me".into(),
-                    domain_part: DomainPart::DomainLiteral("1.2.3.4".into())
+                    domain_part: DomainPart::DomainLiteral(IpAddr::from([1, 2, 3, 4])),
                 },
                 ""
             ))
         );
         assert_eq!(
-            parse_angle_addr("<\"who \" @\twhat.->"),
+            parse_angle_addr("<\"who \" @\twhat.x>"),
             Some((
                 AddrSpec {
                     local_part: "\"who \"".into(),
-                    domain_part: DomainPart::DomainName("what.-".into())
+                    domain_part: DomainPart::DomainName(DomainName::new("what.x").unwrap()),
                 },
                 ""
             ))

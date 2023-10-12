@@ -82,17 +82,18 @@ async fn handle_negotiate(
         }
     }
 
-    let can_skip = supported_opts.contains(ProtoOpts::SKIP);
-    if can_skip {
-        context.requested_opts |= ProtoOpts::SKIP;
-    } else {
-        warn!("MTA does not support skipping repeated callback calls");
-    }
-
     if !supported_opts.contains(ProtoOpts::LEADING_SPACE) {
         error!("MTA does not support accurate whitespace handling in headers, aborting");
     }
     context.requested_opts |= ProtoOpts::LEADING_SPACE;
+
+    let can_skip = supported_opts.contains(ProtoOpts::SKIP);
+    if can_skip {
+        context.requested_opts |= ProtoOpts::SKIP;
+    } else {
+        // Only `warn!` here, we can proceed just fine without Skip.
+        warn!("MTA does not support skipping repeated callback calls");
+    }
 
     let macros = &mut context.requested_macros;
     macros.insert(MacroStage::Connect, c_str!("j").into());
@@ -122,10 +123,14 @@ async fn handle_connect(context: &mut Context<Session>, socket_info: SocketInfo)
     Status::Continue
 }
 
-async fn handle_mail(context: &mut Context<Session>, _smtp_args: Vec<CString>) -> Status {
+async fn handle_mail(context: &mut Context<Session>, smtp_args: Vec<CString>) -> Status {
     let session = get_session!(context);
 
     session.init_message();
+
+    let mail_from = smtp_args[0].to_string_lossy();
+
+    session.set_envelope_sender(mail_from.into());
 
     if let Some(_login) = context.macros.get_string(c_str!("{auth_type}")) {
         session.set_authenticated();
@@ -139,7 +144,7 @@ async fn handle_rcpt(context: &mut Context<Session>, smtp_args: Vec<CString>) ->
 
     let rcpt_to = smtp_args[0].to_string_lossy();
 
-    session.add_recipient(rcpt_to.into());
+    session.add_envelope_recipient(rcpt_to.into());
 
     Status::Continue
 }

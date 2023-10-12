@@ -10,7 +10,7 @@ use crate::{
     session::{DomainExpr, IdentityDomainExpr, LocalPartExpr, SenderMatch},
 };
 use indymilter::{ActionError, ContextActions, Status};
-use log::{error, info};
+use log::{info, warn};
 use std::{collections::HashSet, error::Error, sync::Arc};
 use viadkim::{
     crypto::SigningKey,
@@ -61,7 +61,7 @@ impl Signer {
             let signing_config = match config.signing_config.merged_with(&final_overrides) {
                 Ok(config) => config,
                 Err(e) => {
-                    error!("failed to construct valid signing configuration, ignoring request: {e}");
+                    warn!("failed to construct valid signing configuration, ignoring request: {e}");
                     continue;
                 }
             };
@@ -71,7 +71,7 @@ impl Signer {
                     requests.push(request);
                 }
                 Err(e) => {
-                    error!("failed to create sign request, ignoring request: {e}");
+                    warn!("failed to create sign request, ignoring request: {e}");
                 }
             }
         }
@@ -104,7 +104,7 @@ impl Signer {
             match res {
                 Err(_e) => {
                     // TODO state domain/selector
-                    error!("{id}: failed to sign message");
+                    warn!("{id}: failed to sign message");
                 }
                 Ok(SigningResult {
                     signature,
@@ -354,7 +354,7 @@ mod tests {
 
         let selection = select_headers(&headers, &signed, &oversigned, &default, &default_unsigned);
 
-        assert!(dbg!(&selection)
+        assert!(selection
             .iter()
             .map(|n| n.as_ref())
             .eq(["aa", "bb", "aa", "from", "aa", "bb", "from", "To", "Ee"]));

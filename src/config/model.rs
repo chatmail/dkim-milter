@@ -221,14 +221,14 @@ impl FromStr for Socket {
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
-pub enum OperationMode {
+pub enum OpMode {
     Sign,
     Verify,
     #[default]
     Auto,
 }
 
-impl FromStr for OperationMode {
+impl FromStr for OpMode {
     type Err = &'static str;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {

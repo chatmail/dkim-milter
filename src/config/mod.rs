@@ -11,9 +11,8 @@ use crate::{
     config::{
         format::{ParseConfigError, ValidationError},
         model::{
-            LogDestination, LogLevel, OperationMode, OverrideEntries, OverrideNetworkEntry,
-            SigningConfig, SigningSenders, Socket, SyslogFacility, TrustedNetworks,
-            VerificationConfig,
+            LogDestination, LogLevel, OpMode, OverrideEntries, OverrideNetworkEntry, SigningConfig,
+            SigningSenders, Socket, SyslogFacility, TrustedNetworks, VerificationConfig,
         },
     },
     resolver::{DomainResolver, Resolver},
@@ -141,8 +140,9 @@ pub struct Config {
     pub delete_incoming_authentication_results: bool,
     pub dry_run: bool,
     pub log_config: LogConfig,
-    pub mode: OperationMode,
+    pub mode: OpMode,
     pub recipient_overrides: Option<OverrideEntries>,
+    pub require_envelope_sender_match: bool,
     pub signing_config: SigningConfig,
     pub signing_senders: SigningSenders,
     pub socket: Socket,
@@ -168,6 +168,7 @@ impl fmt::Debug for Config {
             .field("log_config", &self.log_config)
             .field("mode", &self.mode)
             .field("recipient_overrides", &self.recipient_overrides)
+            .field("require_envelope_sender_match", &self.require_envelope_sender_match)
             .field("signing_config", &self.signing_config)
             .field("signing_senders", &"<omitted>")
             .field("socket", &self.socket)

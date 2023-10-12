@@ -1,16 +1,16 @@
 use crate::{
     auth_results,
     config::{
-        model::{ConfigOverrides, OperationMode, PartialSigningConfig, SigningSenders},
+        model::{ConfigOverrides, OpMode, PartialSigningConfig, SigningSenders},
         Config, SessionConfig,
     },
-    format::{self, MailAddr},
+    format::{self, AddrSpec, MailAddr},
     sign::Signer,
     util,
     verify::Verifier,
 };
 use indymilter::{ActionError, ContextActions, SetErrorReply, Status};
-use log::{debug, info};
+use log::{debug, warn};
 use std::{
     borrow::Cow,
     error::Error,
@@ -54,15 +54,23 @@ impl ConnectionData {
     fn hostname(&self) -> &str {
         self.hostname.as_deref().expect("no hostname available")
     }
+
+    // Connection overrides can be calculated once for the connection and then
+    // cached.
+    fn get_connection_overrides(&mut self, config: &Config) -> &ConfigOverrides {
+        self.connection_overrides
+            .get_or_insert_with(|| get_connection_overrides(self.ip, config))
+    }
 }
 
 #[derive(Default)]
 struct MessageData {
     auth: bool,
-    recipients: Vec<String>,
+    env_sender: Option<String>,
+    env_recipients: Vec<String>,
     header_bytes: usize,
-    sender_address: Option<Result<MailAddr, SenderAddrError>>,
-    from_addresses: Option<Result<Vec<MailAddr>, SenderAddrError>>,
+    sender_address: Option<Result<AddrSpec, SenderAddrError>>,
+    from_addresses: Option<Result<Vec<AddrSpec>, SenderAddrError>>,
     auth_results_i: usize,
     auth_results_deletions: Vec<usize>,
     mode: Mode,
@@ -74,6 +82,10 @@ impl MessageData {
         Default::default()
     }
 }
+
+// Implementation note: Careful when returning `Status::Accept` instead of
+// `Status::Continue`: it ends the processing flow for the message, bypassing
+// any later steps such as header deletion.
 
 pub struct Session {
     session_config: Arc<SessionConfig>,
@@ -105,15 +117,18 @@ impl Session {
         self.message = Some(MessageData::new());
     }
 
+    pub fn set_envelope_sender(&mut self, env_sender: String) {
+        let sender = trim_env_address(env_sender);
+        self.message.as_mut().unwrap().env_sender = Some(sender);
+    }
+
     pub fn set_authenticated(&mut self) {
         self.message.as_mut().unwrap().auth = true;
     }
 
-    pub fn add_recipient(&mut self, mut rcpt: String) {
-        if let Some(s) = rcpt.strip_prefix('<').and_then(|s| s.strip_suffix('>')) {
-            rcpt = s.into();
-        }
-        self.message.as_mut().unwrap().recipients.push(rcpt);
+    pub fn add_envelope_recipient(&mut self, env_recipient: String) {
+        let rcpt = trim_env_address(env_recipient);
+        self.message.as_mut().unwrap().env_recipients.push(rcpt);
     }
 
     pub fn process_header(
@@ -152,8 +167,8 @@ impl Session {
                     Ok(addr) => {
                         message.sender_address = Some(Ok(addr));
                     }
-                    Err(e) => {
-                        debug!("{id}: unusable Sender header field: {e}");
+                    Err(_) => {
+                        debug!("{id}: unusable Sender header field");
                         message.sender_address = Some(Err(SenderAddrError::Syntax));
                     }
                 }
@@ -170,8 +185,8 @@ impl Session {
                     Ok(addr) => {
                         message.from_addresses = Some(Ok(addr));
                     }
-                    Err(e) => {
-                        debug!("{id}: unusable From header field: {e}");
+                    Err(_) => {
+                        debug!("{id}: unusable From header field");
                         message.from_addresses = Some(Err(SenderAddrError::Syntax));
                     }
                 }
@@ -214,6 +229,9 @@ impl Session {
         Ok(Status::Continue)
     }
 
+    // This step ends the header processing bit, and so will freely remove
+    // certain things from the message-scoped data *that is not used further
+    // down*.
     pub async fn init_processing(&mut self, id: &str) -> Result<Status, Box<dyn Error>> {
         let message = match self.message.as_mut() {
             Some(message) => message,
@@ -226,61 +244,75 @@ impl Session {
             Err(_) => {
                 // For now, give up if inputs don't look like an email header at all
                 debug!("{id}: accepted message with unusable header fields");
-                return Ok(Status::Accept);
+                return Ok(Status::Continue);
             }
         };
 
-        // Minimalistic interpretation of RFC 6376, section 3.8: ‘Signers and
-        // Verifiers SHOULD take reasonable steps to ensure that the messages
-        // they are processing are valid according to [RFC5322], [RFC2045], and
-        // any other relevant message format standards.’
-        if let Err(e) = validate_rfc5322(&headers) {
-            // For now, simply log that we are proceeding with an ill-formed header.
-            info!("{id}: proceeding with header not conforming to RFC 5322: {e}");
+        let sender_address = message.sender_address.take();
+        let from_addresses = message.from_addresses.take();
+
+        let config = &self.session_config.config;
+
+        // RFC 6376, section 3.8: ‘Signers and Verifiers SHOULD take reasonable
+        // steps to ensure that the messages they are processing are valid
+        // according to [RFC5322], [RFC2045], and any other relevant message
+        // format standards.’ For now simply log that we are proceeding with an
+        // ill-formed header.
+        if let Err(e) = validate_rfc5322(&headers, sender_address.as_ref(), from_addresses.as_ref()) {
+            debug!("{id}: proceeding with header not conforming to RFC 5322: {e}");
         }
 
         // A trusted sender is eligible for signing, and is not eligible for
         // verifying.
-        let authorized = is_trusted_sender(id, &self.session_config.config, self.conn.ip, message.auth);
+        let authorized = is_trusted_sender(id, config, self.conn.ip, message.auth);
 
-        let mode = match self.session_config.config.mode {
-            mode @ (OperationMode::Sign | OperationMode::Auto) => {
-                if authorized {
-                    let sender = extract_sender(
-                        id,
-                        message.sender_address.as_ref(),
-                        message.from_addresses.as_ref(),
-                    );
-
-                    let matches = match sender {
-                        Some(sender) => find_matching_senders(&self.session_config.config.signing_senders, sender),
-                        None => vec![],
-                    };
-
-                    // signing mode if authorised and right domain to sign in From
-                    if matches.is_empty() {
-                        debug!("{id}: accepted message from trusted sender not configured for signing");
-                        return Ok(Status::Accept);
-                    } else {
-                        // TODO cloning b/c of borrow checker
-                        let sender: MailAddr = sender.unwrap().clone();
-
-                        self.enter_signing_mode(id, headers, &sender, matches)?
+        let mode = match (config.mode, authorized) {
+            (OpMode::Sign | OpMode::Auto, Authorization::Trusted) => {
+                let sender = match extract_sender(id, sender_address, from_addresses) {
+                    Some(sender) => sender,
+                    None => {
+                        debug!("{id}: not signing message from trusted sender without usable originator");
+                        return Ok(Status::Continue);
                     }
-                } else if mode == OperationMode::Auto {
-                    self.enter_verifying_mode(id, headers).await
-                } else {
-                    debug!("{id}: accepted message from untrusted sender");
-                    return Ok(Status::Accept);
+                };
+
+                let matches = find_matching_senders(&config.signing_senders, &sender).await;
+
+                if matches.is_empty() {
+                    debug!("{id}: not signing message from trusted sender not configured for signing");
+                    return Ok(Status::Continue);
                 }
+
+                if config.require_envelope_sender_match
+                    && !is_env_sender_match(message.env_sender.as_deref(), &sender)
+                {
+                    // Log at warn level because here a trusted sender for whom
+                    // signing was set up is using a different originator
+                    // header. If this is not a malicious attempt, then it is
+                    // likely a misconfiguration.
+                    warn!("{id}: not signing message, trusted sender used originator header \
+                        that did not match envelope sender");
+                    return Ok(Status::Continue);
+                }
+
+                self.enter_signing_mode(id, headers, sender, matches).await?
             }
-            OperationMode::Verify => {
-                if authorized {
-                    debug!("{id}: accepted message from trusted sender");
-                    return Ok(Status::Accept);
-                } else {
-                    self.enter_verifying_mode(id, headers).await
-                }
+            (OpMode::Sign, Authorization::Untrusted) => {
+                debug!("{id}: not signing message from untrusted sender");
+                return Ok(Status::Continue);
+            }
+            (OpMode::Verify, Authorization::Trusted) => {
+                debug!("{id}: not verifying message from trusted sender");
+                return Ok(Status::Continue);
+            }
+            (OpMode::Verify | OpMode::Auto, Authorization::Untrusted) => {
+                let from_addresses = match from_addresses {
+                    Some(Ok(addrs)) => addrs.into_iter()
+                        .filter_map(|addr| addr.into_mail_addr())
+                        .collect(),
+                    _ => vec![],
+                };
+                self.enter_verifying_mode(id, headers, from_addresses).await
             }
         };
 
@@ -290,31 +322,26 @@ impl Session {
         Ok(Status::Continue)
     }
 
-    fn enter_signing_mode(
+    async fn enter_signing_mode(
         &mut self,
         id: &str,
         headers: HeaderFields,
-        sender: &MailAddr,
+        sender: MailAddr,
         matches: Vec<SenderMatch>,
     ) -> Result<Mode, Box<dyn Error>> {
         debug!("{id}: entered signing mode");
 
-        // Connection overrides should be calculated only once
-        // for the connection and then cached.
-        // let (connection_overrides, recipient_overrides) = self.get_overrides();
-        let connection_overrides: &ConfigOverrides =
-            self.conn.connection_overrides.get_or_insert_with(|| {
-                get_connection_overrides(self.conn.ip, &self.session_config.config)
-            });
+        let connection_overrides =
+            self.conn.get_connection_overrides(&self.session_config.config);
 
-        let recipients = &self.message.as_ref().unwrap().recipients;
-        let recipient_overrides: ConfigOverrides =
+        let recipients = &self.message.as_ref().unwrap().env_recipients;
+        let recipient_overrides =
             get_recipient_overrides(recipients, &self.session_config.config);
 
         let signer = Signer::init(
             &self.session_config.config,
             headers,
-            sender,
+            &sender,
             matches,
             &connection_overrides.signing_config,
             &recipient_overrides.signing_config,
@@ -327,19 +354,21 @@ impl Session {
         &mut self,
         id: &str,
         headers: HeaderFields,
+        from_addresses: Vec<MailAddr>,
     ) -> Mode {
         debug!("{id}: entered verifying mode");
 
-        // TODO duplicated
-        let connection_overrides: &ConfigOverrides =
-            self.conn.connection_overrides.get_or_insert_with(|| {
-                get_connection_overrides(self.conn.ip, &self.session_config.config)
-            });
-        let recipients = &self.message.as_ref().unwrap().recipients;
-        let recipient_overrides: ConfigOverrides =
+        let connection_overrides =
+            self.conn.get_connection_overrides(&self.session_config.config);
+
+        let recipients = &self.message.as_ref().unwrap().env_recipients;
+        let recipient_overrides =
             get_recipient_overrides(recipients, &self.session_config.config);
 
-        let verifier = Verifier::init(&self.session_config, headers,
+        let verifier = Verifier::init(
+            &self.session_config,
+            headers,
+            from_addresses,
             &connection_overrides.verification_config,
             &recipient_overrides.verification_config,
         ).await;
@@ -354,7 +383,7 @@ impl Session {
         };
 
         match &mut message.mode {
-            Mode::Inactive => Ok(Status::Skip),  // not reached
+            Mode::Inactive => Ok(Status::Skip),
             Mode::Signing(signer) => signer.process_body_chunk(chunk),
             Mode::Verifying(verifier) => verifier.process_body_chunk(chunk),
         }
@@ -379,7 +408,7 @@ impl Session {
         }
 
         match message.mode {
-            Mode::Inactive => Ok(Status::Continue),  // not reached
+            Mode::Inactive => Ok(Status::Continue),
             Mode::Signing(signer) => {
                 let status = signer.finish(id, config, actions).await?;
 
@@ -388,9 +417,7 @@ impl Session {
             Mode::Verifying(verifier) => {
                 let authserv_id = authserv_id(config, self.conn.hostname());
 
-                let status = verifier.finish(
-                    id, config, authserv_id, message.from_addresses.as_ref(), reply, actions
-                ).await?;
+                let status = verifier.finish(id, config, authserv_id, reply, actions).await?;
 
                 Ok(status)
             }
@@ -399,6 +426,13 @@ impl Session {
 
     pub fn abort_message(&mut self) {
         self.message = None;
+    }
+}
+
+fn trim_env_address(env_addr: String) -> String {
+    match env_addr.strip_prefix('<').and_then(|s| s.strip_suffix('>')) {
+        Some(s) => s.into(),
+        None => env_addr,
     }
 }
 
@@ -433,6 +467,7 @@ pub enum HeaderValidationError {
     MultipleInReplyTo,
     MultipleReferences,
     MultipleSubject,
+    MultiMailboxFromNoSender,
 }
 
 impl Display for HeaderValidationError {
@@ -449,6 +484,9 @@ impl Display for HeaderValidationError {
             Self::MultipleInReplyTo => write!(f, "more than one In-Reply-To header"),
             Self::MultipleReferences => write!(f, "more than one References header"),
             Self::MultipleSubject => write!(f, "more than one Subject header"),
+            Self::MultiMailboxFromNoSender => {
+                write!(f, "multiple mailboxes in From but no Sender header")
+            }
         }
     }
 }
@@ -460,7 +498,11 @@ impl Error for HeaderValidationError {}
 // Validates the given header according to RFC 5322, 3.6. This only validates
 // the cardinality requirements in the table at the end of section 3.6, not the
 // format of the headers.
-pub fn validate_rfc5322(header: impl AsRef<[HeaderField]>) -> Result<(), HeaderValidationError> {
+pub fn validate_rfc5322(
+    header: impl AsRef<[HeaderField]>,
+    sender_address: Option<&Result<AddrSpec, SenderAddrError>>,
+    from_addresses: Option<&Result<Vec<AddrSpec>, SenderAddrError>>,
+) -> Result<(), HeaderValidationError> {
     fn count_names(header: &[HeaderField], name: &str) -> usize {
         header.iter().filter(|(n, _)| *n == name).count()
     }
@@ -501,12 +543,24 @@ pub fn validate_rfc5322(header: impl AsRef<[HeaderField]>) -> Result<(), HeaderV
         return Err(HeaderValidationError::MultipleSubject);
     }
 
-    // TODO also check "Sender MUST occur with multi-address From" here
+    // RFC 5322, section 3.6.2: ‘If the from field contains more than one
+    // mailbox specification in the mailbox-list, then the sender field […] MUST
+    // appear in the message.’ Again, this only checks cardinality, not if these
+    // headers are well-formed.
+    if let Some(Ok(addrs)) = from_addresses {
+        if addrs.len() > 1 && sender_address.is_none() {
+            return Err(HeaderValidationError::MultiMailboxFromNoSender);
+        }
+    }
 
     Ok(())
 }
 
-fn is_trusted_sender(id: &str, config: &Config, ip: Option<IpAddr>, authenticated: bool) -> bool {
+enum Authorization {
+    Trusted, Untrusted
+}
+
+fn is_trusted_sender(id: &str, config: &Config, ip: Option<IpAddr>, authenticated: bool) -> Authorization {
     match ip {
         Some(addr) => {
             if config.trusted_networks.contains(addr) {
@@ -515,24 +569,24 @@ fn is_trusted_sender(id: &str, config: &Config, ip: Option<IpAddr>, authenticate
                 } else {
                     debug!("{id}: message from trusted source: connection from trusted network address {addr}");
                 }
-                return true;
+                return Authorization::Trusted;
             }
         }
         None => {
             // Like OpenDKIM, treat no IP as local connection.
             if config.trusted_networks.contains_loopback() {
                 debug!("{id}: message from trusted source: no IP address, presumed local connection");
-                return true;
+                return Authorization::Trusted;
             }
         }
     }
 
     if config.trust_authenticated_senders && authenticated {
         debug!("{id}: message from trusted source: authenticated sender");
-        return true;
+        return Authorization::Trusted;
     }
 
-    false
+    Authorization::Untrusted
 }
 
 // See RFC 5322, section 3.6.2 for details on the relationship of the Sender and
@@ -541,15 +595,20 @@ fn is_trusted_sender(id: &str, config: &Config, ip: Option<IpAddr>, authenticate
 // Also note RFC 6376, appendix B.2.3: ‘A common practice among systems that are
 // primarily redistributors of mail is to add a Sender header field to the
 // message to identify the address being used to sign the message.’
-fn extract_sender<'a>(
+fn extract_sender(
     id: &str,
-    sender_address: Option<&'a Result<MailAddr, SenderAddrError>>,
-    from_addresses: Option<&'a Result<Vec<MailAddr>, SenderAddrError>>,
-) -> Option<&'a MailAddr> {
+    sender_address: Option<Result<AddrSpec, SenderAddrError>>,
+    from_addresses: Option<Result<Vec<AddrSpec>, SenderAddrError>>,
+) -> Option<MailAddr> {
     match sender_address {
         Some(Ok(addr)) => {
-            debug!("{id}: using originator in Sender header: {addr}");
-            return Some(addr);
+            if let Some(addr) = addr.into_mail_addr() {
+                debug!("{id}: using originator in Sender header: {addr}");
+                return Some(addr);
+            } else {
+                // TODO perhaps a literal Sender header should not fall back to From
+                debug!("{id}: originator address in Sender header is literal, falling back to From");
+            }
         }
         Some(Err(_)) => {
             // TODO perhaps a broken or repeated Sender header should not fall back to From
@@ -560,24 +619,47 @@ fn extract_sender<'a>(
 
     match from_addresses {
         Some(Ok(from_addresses)) => {
-            if from_addresses.len() > 1 {
-                debug!("{id}: originator address in From header not usable");
-                None
-            } else {
-                let addr = from_addresses.first().unwrap();
-                debug!("{id}: using originator in From header: {addr}");
-                Some(addr)
+            assert!(!from_addresses.is_empty());
+            let from_addresses: Vec<_> = from_addresses.into_iter()
+                .filter_map(|addr| addr.into_mail_addr())
+                .collect();
+            match from_addresses.len() {
+                0 => {
+                    debug!("{id}: only literal addresses in From header, not usable");
+                }
+                1 => {
+                    let addr = from_addresses.into_iter().next().unwrap();
+                    debug!("{id}: using originator in From header: {addr}");
+                    return Some(addr);
+                }
+                _ => {
+                    debug!("{id}: originator address in From header not usable");
+                }
             }
         }
         Some(Err(_)) => {
             debug!("{id}: originator address in From header not usable");
-            None
         }
         None => {
             debug!("{id}: no originator address in From or Sender header");
-            None
         }
     }
+
+    None
+}
+
+fn is_env_sender_match(env_sender: Option<&str>, sender: &MailAddr) -> bool {
+    // no or empty (<>) envelope sender, accept
+    let env_sender = match env_sender.filter(|s| !s.is_empty()) {
+        Some(env_sender) => env_sender,
+        None => return true,
+    };
+
+    // TODO
+    // try to compare directly
+    // try to compare after IDNA/case-normalise
+
+    env_sender.eq_ignore_ascii_case(&sender.to_string())
 }
 
 pub fn authserv_id<'a>(config: &'a Config, hostname: &'a str) -> &'a str {
@@ -619,7 +701,8 @@ pub struct SenderMatch {
     pub signing_config: Option<PartialSigningConfig>,
 }
 
-fn find_matching_senders(
+// TODO make async, may be DB lookup later
+async fn find_matching_senders(
     signing_senders: &SigningSenders,
     sender: &MailAddr,
 ) -> Vec<SenderMatch> {
@@ -761,13 +844,16 @@ mod tests {
             ),
         ];
 
-        assert_eq!(validate_rfc5322(&header), Ok(()));
+        assert_eq!(validate_rfc5322(&header, None, None), Ok(()));
 
         header.push((
             FieldName::new("fRom").unwrap(),
             FieldBody::new(*b" me too").unwrap(),
         ));
 
-        assert_eq!(validate_rfc5322(&header), Err(HeaderValidationError::NoSingleFrom));
+        assert_eq!(
+            validate_rfc5322(&header, None, None),
+            Err(HeaderValidationError::NoSingleFrom)
+        );
     }
 }

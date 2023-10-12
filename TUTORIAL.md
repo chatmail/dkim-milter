@@ -1,6 +1,6 @@
 # DKIM Milter tutorial
 
-TODO compare with OpenDKIM's ./opendkim/README document
+<!-- TODO compare with OpenDKIM's ./opendkim/README document -->
 
 This tutorial demonstrates step by step how to set up a basic DKIM Milter
 service. It shows how to configure signing and verifying for a simple

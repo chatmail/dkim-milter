@@ -3,7 +3,7 @@
 use crate::config::{
     self,
     model::{
-        ConfigOverrides, LogDestination, LogLevel, OperationMode, PartialSigningConfig,
+        ConfigOverrides, LogDestination, LogLevel, OpMode, PartialSigningConfig,
         PartialVerificationConfig, SenderEntry, SignedFieldName, SigningSenders, Socket,
         SyslogFacility, TrustedNetworks,
     },
@@ -212,8 +212,9 @@ pub struct RawConfig {
     pub delete_incoming_authentication_results: Option<bool>,
     pub dry_run: Option<bool>,
     pub log_config: PartialLogConfig,
-    pub mode: Option<OperationMode>,
+    pub mode: Option<OpMode>,
     pub recipient_overrides_file: Option<(usize, String)>,
+    pub require_envelope_sender_match: Option<bool>,
     pub signing_config: PartialSigningConfig,
     pub signing_keys_file: Option<(usize, String)>,
     pub signing_senders_file: Option<(usize, String)>,
@@ -544,7 +545,7 @@ async fn parse_raw_config(file_content: &str) -> Result<RawConfig, ConfigErrorKi
                 config.authserv_id = Some(v.to_owned());
             }
             "mode" => {
-                let value = OperationMode::from_str(v).map_err(|_| {
+                let value = OpMode::from_str(v).map_err(|_| {
                     ParseConfigError::new(num, ParseParamError::InvalidMode(v.into()))
                 })?;
                 config.mode = Some(value);
@@ -552,6 +553,10 @@ async fn parse_raw_config(file_content: &str) -> Result<RawConfig, ConfigErrorKi
             "dry_run" => {
                 let value = params::parse_boolean(v).map_err(|e| ParseConfigError::new(num, e))?;
                 config.dry_run = Some(value);
+            }
+            "require_envelope_sender_match" => {
+                let value = params::parse_boolean(v).map_err(|e| ParseConfigError::new(num, e))?;
+                config.require_envelope_sender_match = Some(value);
             }
             _ => {
                 let mut inserted_param;
@@ -641,6 +646,7 @@ async fn build_config(
     let mode = raw_config.mode.unwrap_or_default();
 
     let delete_incoming_authentication_results = raw_config.delete_incoming_authentication_results.unwrap_or(true);
+    let require_envelope_sender_match = raw_config.require_envelope_sender_match.unwrap_or(false);
     let trust_authenticated_senders = raw_config.trust_authenticated_senders.unwrap_or(true);
     let trusted_networks = raw_config.trusted_networks.unwrap_or_default();
 
@@ -658,6 +664,7 @@ async fn build_config(
         log_config,
         mode,
         recipient_overrides,
+        require_envelope_sender_match,
         signing_config,
         signing_senders,
         socket,

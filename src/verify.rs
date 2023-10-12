@@ -9,7 +9,6 @@ use crate::{
     },
     format::MailAddr,
     resolver::Resolver,
-    session::SenderAddrError,
 };
 use indymilter::{ContextActions, SetErrorReply, Status};
 use log::{debug, info};
@@ -24,12 +23,14 @@ use viadkim::{
 pub struct Verifier {
     delegate: Option<viadkim::Verifier>,
     config: VerificationConfig,
+    from_addresses: Vec<MailAddr>,
 }
 
 impl Verifier {
     pub async fn init(
         session_config: &SessionConfig,
         headers: HeaderFields,
+        from_addresses: Vec<MailAddr>,
         connection_overrides: &PartialVerificationConfig,
         recipient_overrides: &PartialVerificationConfig,
     ) -> Self {
@@ -73,6 +74,7 @@ impl Verifier {
         Self {
             delegate: verifier,
             config: vconfig,
+            from_addresses,
         }
     }
 
@@ -94,7 +96,6 @@ impl Verifier {
         id: &str,
         config: &Config,
         authserv_id: &str,
-        from_addresses: Option<&Result<Vec<MailAddr>, SenderAddrError>>,
         reply: &mut impl SetErrorReply,
         actions: &impl ContextActions,
     ) -> Result<Status, Box<dyn Error>> {
@@ -113,6 +114,8 @@ impl Verifier {
         }
 
         let mut sig_status = SigStatus::Missing;
+
+        let from_addresses = &self.from_addresses;
 
         // log all sigs, and determine status for potential rejection
 
@@ -197,7 +200,7 @@ impl Verifier {
         if rejects.contains(&RejectFailure::Missing) && sig_status == SigStatus::Missing {
             if config.dry_run {
                 debug!("{id}: rejected message missing signature [dry run, not done]");
-                return Ok(Status::Accept);
+                return Ok(Status::Continue);
             } else {
                 debug!("{id}: rejected message missing signature");
                 reply.set_error_reply("550", Some("5.7.20"), ["No DKIM signature found"])?;
@@ -208,7 +211,7 @@ impl Verifier {
         if rejects.contains(&RejectFailure::Failing) && sig_status == SigStatus::Failing {
             if config.dry_run {
                 debug!("{id}: rejected message without acceptable signature [dry run, not done]");
-                return Ok(Status::Accept);
+                return Ok(Status::Continue);
             } else {
                 debug!("{id}: rejected message without acceptable signature");
                 reply.set_error_reply("550", Some("5.7.21"), ["No acceptable DKIM signature found"])?;
@@ -219,7 +222,7 @@ impl Verifier {
         if rejects.contains(&RejectFailure::AuthorMismatch) && sig_status == SigStatus::Passing {
             if config.dry_run {
                 debug!("{id}: rejected message without acceptable author-matched signature [dry run, not done]");
-                return Ok(Status::Accept);
+                return Ok(Status::Continue);
             } else {
                 debug!("{id}: rejected message without acceptable author-matched signature");
                 reply.set_error_reply("550", Some("5.7.22"), ["No valid author-matched DKIM signature found"])?;
@@ -467,16 +470,11 @@ fn compute_signature_prefixes_internal(
 
 fn is_author_matched_domain(
     sig: Option<&DkimSignature>,
-    from_addresses: Option<&Result<Vec<MailAddr>, SenderAddrError>>,
+    from_addresses: &[MailAddr],
 ) -> bool {
     let domain = match sig {
         Some(sig) => &sig.domain,
         None => return false,
-    };
-
-    let from_addresses = match from_addresses {
-        Some(Ok(addrs)) => addrs,
-        _ => return false,
     };
 
     for addr in from_addresses {

@@ -74,6 +74,22 @@ The milter’s operating mode.
 .BR recipient_overrides " (\fIpath\fR)"
 File path to the table listing per-recipient configuration overrides.
 .TP
+.BR require_envelope_sender_match " (\fIboolean\fR)"
+Whether to accept for signing only senders (in the
+.I Sender
+or
+.I From
+header) that match the envelope sender in the MAIL FROM command.
+When this setting is disabled, the originator email address taken from the
+.I Sender
+or
+.I From
+header will be used for the signing senders lookup even if it differs from the
+envelope address.
+This parameter is intended to prevent cross-user signing, where one (trusted)
+user would be able to use signing key and configuration for a different user.
+The default is false.
+.TP
 .BR signing_keys " (\fIpath\fR)"
 File path to the table listing the available signing keys.
 .TP
