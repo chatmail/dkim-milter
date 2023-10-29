@@ -1,10 +1,26 @@
+// DKIM Milter – milter for DKIM signing and verification
+// Copyright © 2022–2023 David Bürgin <dbuergin@gluet.ch>
+//
+// This program is free software: you can redistribute it and/or modify it under
+// the terms of the GNU General Public License as published by the Free Software
+// Foundation, either version 3 of the License, or (at your option) any later
+// version.
+//
+// This program is distributed in the hope that it will be useful, but WITHOUT
+// ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
+// FOR A PARTICULAR PURPOSE. See the GNU General Public License for more
+// details.
+//
+// You should have received a copy of the GNU General Public License along with
+// this program. If not, see <https://www.gnu.org/licenses/>.
+
 //! Configuration file format.
 
 use crate::config::{
     self,
     model::{
         ConfigOverrides, LogDestination, LogLevel, OpMode, PartialSigningConfig,
-        PartialVerificationConfig, SenderEntry, SignedFieldName, SigningSenders, Socket,
+        PartialVerificationConfig, SignedFieldName, SigningSender, SigningSenders, Socket,
         SyslogFacility, TrustedNetworks,
     },
     params,
@@ -77,7 +93,6 @@ impl Error for ParseConfigError {
             | InvalidHashAlgorithm(_)
             | InvalidCanonicalization(_)
             | InvalidDuration(_)
-            | InvalidExpiration(_)
             | InvalidRejectFailure(_)
             | InvalidMode(_) => None,
             ReadSigningKeys(e)
@@ -113,7 +128,6 @@ impl Display for ParseConfigError {
             | InvalidHashAlgorithm(_)
             | InvalidCanonicalization(_)
             | InvalidDuration(_)
-            | InvalidExpiration(_)
             | InvalidRejectFailure(_)
             | InvalidMode(_) => write!(f, ": {}", self.kind),
             ReadSigningKeys(_)
@@ -124,7 +138,6 @@ impl Display for ParseConfigError {
     }
 }
 
-// TODO rename *Kind?
 #[derive(Debug)]
 pub enum ParseParamError {
     InvalidLine,
@@ -147,7 +160,6 @@ pub enum ParseParamError {
     InvalidHashAlgorithm(String),
     InvalidCanonicalization(String),
     InvalidDuration(String),
-    InvalidExpiration(String),
     InvalidMode(String),
     InvalidRejectFailure(String),
 
@@ -183,7 +195,6 @@ impl Display for ParseParamError {
             Self::InvalidHashAlgorithm(s) => write!(f, "invalid hash algorithm \"{s}\""),
             Self::InvalidCanonicalization(s) => write!(f, "invalid canonicalization \"{s}\""),
             Self::InvalidDuration(s) => write!(f, "invalid duration \"{s}\""),
-            Self::InvalidExpiration(s) => write!(f, "invalid expiration duration \"{s}\""),
             Self::InvalidMode(s) => write!(f, "invalid operation mode \"{s}\""),
             Self::InvalidRejectFailure(s) => write!(f, "invalid rejection specification \"{s}\""),
 
@@ -471,7 +482,8 @@ async fn parse_raw_config(file_content: &str) -> Result<RawConfig, ConfigErrorKi
                 config.trusted_networks = Some(value);
             }
             "authserv_id" => {
-                // TODO validate authserv-id ?
+                // Later, may want to validate the authserv-id. Currently
+                // though, this is safe, as we encode the value properly later.
                 config.authserv_id = Some(v.to_owned());
             }
             "mode" => {
@@ -547,9 +559,12 @@ async fn build_config(
         }
     };
 
+    let mode = raw_config.mode.unwrap_or_default();
+
     let signing_senders = match (raw_config.signing_keys_file, raw_config.signing_senders_file) {
         (Some(signing_keys_file), Some(signing_senders_file)) => {
-            read_signing_config(&signing_keys_file, &signing_senders_file).await?
+            let wants_sign = matches!(mode, OpMode::Sign | OpMode::Auto);
+            read_signing_config(wants_sign, &signing_keys_file, &signing_senders_file).await?
         }
         (None, None) => Default::default(),
         _ => {
@@ -582,8 +597,6 @@ async fn build_config(
         }
         None => None,
     };
-
-    let mode = raw_config.mode.unwrap_or_default();
 
     let delete_incoming_authentication_results = raw_config.delete_incoming_authentication_results.unwrap_or(true);
     let require_envelope_sender_match = raw_config.require_envelope_sender_match.unwrap_or(false);
@@ -620,13 +633,13 @@ async fn build_config(
 }
 
 async fn read_signing_config(
+    wants_sign: bool,
     signing_keys_file: &(usize, String),
     signing_senders_file: &(usize, String),
 ) -> Result<SigningSenders, ParseConfigError> {
     // Note: idea here is to warn but continue with an incomplete config and
     // only actually log an error when the milter is unable to sign a message
     // (for example, such a config does not prevent *verification* from working properly)
-    // TODO warnings about not being able to sign should only be printed if signing mode is enabled
 
     let signing_keys = tables::read_signing_keys_table(&signing_keys_file.1)
         .await
@@ -635,7 +648,7 @@ async fn read_signing_config(
             kind: ParseParamError::ReadSigningKeys(e),
         })?;
 
-    if signing_keys.is_empty() {
+    if signing_keys.is_empty() && wants_sign {
         warn!("no signing keys available, no signing will be done");
     }
 
@@ -664,8 +677,8 @@ async fn read_signing_config(
         warn!("unused signing key \"{}\" found in signing keys", name);
     }
 
-    if signing_senders.is_empty() {
-        warn!("no sender exprs available, no signing will be done");
+    if signing_senders.is_empty() && wants_sign {
+        warn!("no signing senders available, no signing will be done");
     }
 
     let key_store: HashMap<_, _> = signing_keys.into_iter().map(|(k, v)| {
@@ -673,11 +686,11 @@ async fn read_signing_config(
     }).collect();
 
     let entries: Vec<_> = signing_senders.into_iter().map(|entry| {
-        SenderEntry {
+        SigningSender {
             sender_expr: entry.sender_expr,
-            domain: entry.domain,
+            domain: entry.domain_expr,
             selector: entry.selector,
-            key_name: Arc::clone(key_store.get(&entry.key_name).unwrap()),
+            key: Arc::clone(key_store.get(&entry.key_name).unwrap()),
             signing_config: entry.signing_config,
         }
     }).collect();
@@ -721,6 +734,19 @@ fn parse_signing_config_param(
     v: &str,
 ) -> Result<bool, ParseParamError> {
     match k {
+        "ascii_only_signatures" => {
+            let value = params::parse_boolean(v)?;
+            config.ascii_only_signatures = Some(value);
+        }
+        "canonicalization" => {
+            let value = Canonicalization::from_str(v)
+                .map_err(|_| ParseParamError::InvalidCanonicalization(v.into()))?;
+            config.canonicalization = Some(value);
+        }
+        "copy_headers" => {
+            let value = params::parse_boolean(v)?;
+            config.copy_headers = Some(value);
+        }
         "default_signed_headers" => {
             let value = params::parse_default_signed_headers(v)?;
             config.default_signed_headers = Some(value.into());
@@ -729,38 +755,29 @@ fn parse_signing_config_param(
             let value = params::parse_default_unsigned_headers(v)?;
             config.default_unsigned_headers = Some(value.into());
         }
-        "signed_headers" => {
-            let value = params::parse_signed_headers(v)?;
-            config.signed_headers = Some(value.into());
-        }
-        "oversigned_headers" => {
-            let value = params::parse_oversigned_headers(v)?;
-            config.oversigned_headers = Some(value.into());
+        "expiration" => {
+            let value = params::parse_expiration(v)?;
+            config.expiration = Some(value);
         }
         "hash_algorithm" => {
             let value = params::parse_hash_algorithm(v)?;
             config.hash_algorithm = Some(value);
         }
-        "canonicalization" => {
-            let value = Canonicalization::from_str(v)
-                .map_err(|_| ParseParamError::InvalidCanonicalization(v.into()))?;
-            config.canonicalization = Some(value);
-        }
-        "expire_after" => {
-            let value = params::parse_expiration(v)?;
-            config.expire_after = Some(value);
-        }
-        "copy_headers" => {
-            let value = params::parse_boolean(v)?;
-            config.copy_headers = Some(value);
-        }
         "limit_body_length" => {
             let value = params::parse_boolean(v)?;
             config.limit_body_length = Some(value);
         }
+        "oversign_headers" => {
+            let value = params::parse_oversigned_headers(v)?;
+            config.oversign_headers = Some(value.into());
+        }
         "request_reports" => {
             let value = params::parse_boolean(v)?;
             config.request_reports = Some(value);
+        }
+        "sign_headers" => {
+            let value = params::parse_signed_headers(v)?;
+            config.sign_headers = Some(value.into());
         }
         _ => return Ok(false),
     }
@@ -777,10 +794,6 @@ fn parse_verification_config_param(
             let value = params::parse_boolean(v)?;
             config.allow_expired = Some(value);
         }
-        "min_rsa_key_bits" => {
-            let value = params::parse_u32_as_usize(v)?;
-            config.min_rsa_key_bits = Some(value);
-        }
         "allow_sha1" => {
             let value = params::parse_boolean(v)?;
             config.allow_sha1 = Some(value);
@@ -793,9 +806,13 @@ fn parse_verification_config_param(
             let value = params::parse_boolean(v)?;
             config.forbid_unsigned_content = Some(value);
         }
-        "max_signatures" => {
+        "max_signatures_to_verify" => {
             let value = params::parse_u32_as_usize(v)?;
-            config.max_signatures = Some(value);
+            config.max_signatures_to_verify = Some(value);
+        }
+        "min_rsa_key_bits" => {
+            let value = params::parse_u32_as_usize(v)?;
+            config.min_rsa_key_bits = Some(value);
         }
         "reject_failures" => {
             let value = params::parse_reject_failures(v)?;

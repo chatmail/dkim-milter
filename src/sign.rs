@@ -1,31 +1,51 @@
+// DKIM Milter – milter for DKIM signing and verification
+// Copyright © 2022–2023 David Bürgin <dbuergin@gluet.ch>
+//
+// This program is free software: you can redistribute it and/or modify it under
+// the terms of the GNU General Public License as published by the Free Software
+// Foundation, either version 3 of the License, or (at your option) any later
+// version.
+//
+// This program is distributed in the hope that it will be useful, but WITHOUT
+// ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
+// FOR A PARTICULAR PURPOSE. See the GNU General Public License for more
+// details.
+//
+// You should have received a copy of the GNU General Public License along with
+// this program. If not, see <https://www.gnu.org/licenses/>.
+
 use crate::{
     config::{
         model::{
-            Expiration, OversignedHeaders, PartialSigningConfig, SignedFieldName, SignedHeaders,
-            SigningConfig,
+            DomainExpr, Expiration, IdentityDomainExpr, LocalPartExpr, OversignedHeaders,
+            PartialSigningConfig, SignedFieldName, SignedHeaders, SigningConfig,
         },
         Config,
     },
     format::MailAddr,
-    session::{DomainExpr, IdentityDomainExpr, LocalPartExpr, SenderMatch},
+    session::SenderMatch,
 };
 use indymilter::{ActionError, ContextActions, Status};
-use log::{info, warn};
+use log::{error, info, warn};
 use std::{collections::HashSet, error::Error, sync::Arc};
 use viadkim::{
     crypto::SigningKey,
     header::{FieldName, HeaderFields},
     message_hash::BodyHasherStance,
     signature::{DomainName, Identity, Selector, SigningAlgorithm},
-    signer::{self, BodyLength, HeaderSelection, SignRequest, SigningResult},
+    signer::{self, BodyLength, HeaderSelection, SignRequest, SigningOutput},
 };
 
 pub struct Signer {
     delegate: viadkim::Signer<Arc<SigningKey>>,
+    // `viadkim::Signer` currently does not provide further info about failed
+    // signing requests, so store the active request domains for logging.
+    signed_domains: Vec<DomainName>,
 }
 
 impl Signer {
     pub fn init(
+        id: &str,
         config: &Config,
         headers: HeaderFields,
         sender: &MailAddr,
@@ -37,10 +57,15 @@ impl Signer {
 
         // step through matches and create SignRequest for each match
 
-        // TODO limit number of matches processed - abort and warn if exceeded
-
         let mut requests = vec![];
-        for match_ in matches {
+        let mut signed_domains = vec![];
+
+        for (i, match_) in matches.into_iter().enumerate() {
+            if i >= 10 {
+                warn!("{id}: more than 10 signatures requested for this message, ignoring further requests");
+                break;
+            }
+
             let (domain, identity) = get_identifiers(match_.domain, sender);
             let selector = match_.selector;
             let signing_key = match_.key;
@@ -50,8 +75,8 @@ impl Signer {
                     // If there are per-sender/per-signature signing config
                     // overrides, combine them all together. The recipient
                     // overrides come last.
-                    let x = connection_overrides.merged_with(c);
-                    x.merged_with(recipient_overrides)
+                    let c = connection_overrides.merged_with(c);
+                    c.merged_with(recipient_overrides)
                 }
                 None => {
                     connection_overrides.merged_with(recipient_overrides)
@@ -61,17 +86,18 @@ impl Signer {
             let signing_config = match config.signing_config.merged_with(&final_overrides) {
                 Ok(config) => config,
                 Err(e) => {
-                    warn!("failed to construct valid signing configuration, ignoring request: {e}");
+                    warn!("{id}: failed to construct valid signing configuration, ignoring request: {e}");
                     continue;
                 }
             };
 
-            match make_sign_request(&signing_config, &headers, domain, identity, selector, signing_key) {
+            match make_sign_request(&signing_config, &headers, domain.clone(), identity, selector, signing_key) {
                 Ok(request) => {
+                    signed_domains.push(domain);
                     requests.push(request);
                 }
                 Err(e) => {
-                    warn!("failed to create sign request, ignoring request: {e}");
+                    warn!("{id}: failed to create sign request, ignoring request: {e}");
                 }
             }
         }
@@ -79,7 +105,10 @@ impl Signer {
         let signer = viadkim::Signer::prepare_signing(headers, requests)
             .map_err(|_| "could not prepare signing")?;
 
-        Ok(Self { delegate: signer })
+        Ok(Self {
+            delegate: signer,
+            signed_domains,
+        })
     }
 
     pub fn process_body_chunk(&mut self, chunk: &[u8]) -> Result<Status, Box<dyn Error>> {
@@ -99,28 +128,24 @@ impl Signer {
         actions: &impl ContextActions,
     ) -> Result<Status, ActionError> {
         let sigs = self.delegate.sign().await;
+        let domains = self.signed_domains;
 
-        for res in sigs {
+        for (res, domain) in sigs.into_iter().zip(domains) {
             match res {
-                Err(_e) => {
-                    // TODO state domain/selector
-                    warn!("{id}: failed to sign message");
-                }
-                Ok(SigningResult {
-                    signature,
-                    header_name: name,
-                    header_value: value,
-                }) => {
+                Ok(SigningOutput { signature, header_name, header_value }) => {
                     if config.dry_run {
                         info!("{id}: signed message for {} [dry run, not done]", signature.domain);
                     } else {
                         info!("{id}: signed message for {}", signature.domain);
 
                         // convert SMTP CRLF to milter line endings
-                        let value = value.replace("\r\n", "\n");
+                        let value = header_value.replace("\r\n", "\n");
 
-                        actions.insert_header(0, name, value).await?;
+                        actions.insert_header(0, header_name, value).await?;
                     }
+                }
+                Err(_) => {
+                    error!("{id}: failed to sign message for {domain}");
                 }
             }
         }
@@ -145,10 +170,8 @@ fn get_identifiers(domain: DomainExpr, sender: &MailAddr) -> (DomainName, Option
                     (domain, domain2)
                 }
                 IdentityDomainExpr::SenderDomain => (sender.domain.clone(), sender.domain.clone()),
-                IdentityDomainExpr::SplitDomain(subdomain, domain) => {
-                    let d = format!("{}.{}", subdomain, domain);
-                    let identity_domain = DomainName::new(d).unwrap();
-                    (domain, identity_domain)
+                IdentityDomainExpr::SplitDomain { d_domain, i_domain } => {
+                    (d_domain, i_domain)
                 }
             };
 
@@ -182,7 +205,7 @@ fn make_sign_request(
 
     request.canonicalization = config.canonicalization;
 
-    request.valid_duration = match config.expire_after {
+    request.valid_duration = match config.expiration {
         Expiration::Never => None,
         Expiration::After(duration) => Some(duration),
     };
@@ -195,8 +218,8 @@ fn make_sign_request(
 
     request.header_selection = HeaderSelection::Manual(select_headers(
         headers,
-        &config.signed_headers,
-        &config.oversigned_headers,
+        &config.sign_headers,
+        &config.oversign_headers,
         &config.default_signed_headers,
         &config.default_unsigned_headers,
     ));
@@ -205,17 +228,19 @@ fn make_sign_request(
         request.ext_tags.push(("r".into(), "y".into()));
     }
 
+    request.format.ascii_only = config.ascii_only_signatures;
+
     Ok(request)
 }
 
 fn select_headers(
     headers: &HeaderFields,
-    signed_headers: &SignedHeaders,
-    oversigned_headers: &OversignedHeaders,
+    sign_headers: &SignedHeaders,
+    oversign_headers: &OversignedHeaders,
     default_signed_headers: &[SignedFieldName],
     default_unsigned_headers: &[SignedFieldName],
 ) -> Vec<FieldName> {
-    let mut selection: Vec<FieldName> = match signed_headers {
+    let mut selection: Vec<FieldName> = match sign_headers {
         s @ (SignedHeaders::Pick(names) | SignedHeaders::PickWithDefault(names)) => {
             let mut names_to_pick: HashSet<_> = names.iter().map(|n| n.as_ref()).collect();
             if matches!(s, SignedHeaders::PickWithDefault(_)) {
@@ -236,7 +261,7 @@ fn select_headers(
         }
     };
 
-    match oversigned_headers {
+    match oversign_headers {
         OversignedHeaders::Pick(names) => {
             let to_oversign: HashSet<_> = names.iter().map(|n| n.as_ref()).collect();
 
@@ -269,7 +294,7 @@ fn select_headers(
                 .cloned()
                 .collect();
 
-            match signed_headers {
+            match sign_headers {
                 s @ (SignedHeaders::Pick(names) | SignedHeaders::PickWithDefault(names)) => {
                     let mut tmp = if matches!(s, SignedHeaders::PickWithDefault(_)) {
                         default_signed_headers.iter().map(|n| n.as_ref()).collect()
@@ -315,10 +340,10 @@ mod tests {
 
         let default = header_vec(["From", "To"]);
         let default_unsigned = vec![];
-        let signed = SignedHeaders::PickWithDefault(header_vec(["Aa", "Bb", "Ee"]));
-        let oversigned = OversignedHeaders::Pick(header_vec(["Bb", "From"]));
+        let sign = SignedHeaders::PickWithDefault(header_vec(["Aa", "Bb", "Ee"]));
+        let oversign = OversignedHeaders::Pick(header_vec(["Bb", "From"]));
 
-        let selection = select_headers(&headers, &signed, &oversigned, &default, &default_unsigned);
+        let selection = select_headers(&headers, &sign, &oversign, &default, &default_unsigned);
 
         assert!(selection
             .iter()
@@ -332,10 +357,10 @@ mod tests {
 
         let default = header_vec(["From", "To"]);
         let default_unsigned = vec![];
-        let signed = SignedHeaders::PickWithDefault(header_vec(["Aa", "Bb", "Ee"]));
-        let oversigned = OversignedHeaders::Signed;
+        let sign = SignedHeaders::PickWithDefault(header_vec(["Aa", "Bb", "Ee"]));
+        let oversign = OversignedHeaders::Signed;
 
-        let selection = select_headers(&headers, &signed, &oversigned, &default, &default_unsigned);
+        let selection = select_headers(&headers, &sign, &oversign, &default, &default_unsigned);
 
         assert!(selection
             .iter()
@@ -349,10 +374,10 @@ mod tests {
 
         let default = header_vec(["From", "To"]);
         let default_unsigned = vec![];
-        let signed = SignedHeaders::PickWithDefault(header_vec(["Aa", "Bb", "Ee"]));
-        let oversigned = OversignedHeaders::Extended;
+        let sign = SignedHeaders::PickWithDefault(header_vec(["Aa", "Bb", "Ee"]));
+        let oversign = OversignedHeaders::Extended;
 
-        let selection = select_headers(&headers, &signed, &oversigned, &default, &default_unsigned);
+        let selection = select_headers(&headers, &sign, &oversign, &default, &default_unsigned);
 
         assert!(selection
             .iter()
@@ -366,10 +391,10 @@ mod tests {
 
         let default = header_vec(["From", "To"]);
         let default_unsigned = header_vec(["cc", "dd"]);
-        let signed = SignedHeaders::All;
-        let oversigned = OversignedHeaders::Extended;
+        let sign = SignedHeaders::All;
+        let oversign = OversignedHeaders::Extended;
 
-        let selection = select_headers(&headers, &signed, &oversigned, &default, &default_unsigned);
+        let selection = select_headers(&headers, &sign, &oversign, &default, &default_unsigned);
 
         assert!(selection
             .iter()

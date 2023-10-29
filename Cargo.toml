@@ -2,7 +2,7 @@
 name = "dkim-milter"
 version = "0.0.6"
 edition = "2021"
-rust-version = "1.65.0"
+rust-version = "1.67.0"
 description = "Milter for DKIM signing and verification"
 license = "GPL-3.0-or-later"
 categories = ["email"]
@@ -12,23 +12,23 @@ exclude = ["/.gitignore", "/.gitlab-ci.yml"]
 
 [dependencies]
 byte-strings = "0.3.1"
-domain = { version = "0.8.1", features = ["resolv"] }
+domain = { version = "0.9.0", features = ["resolv"] }
 futures = "0.3.28"
 idna = "0.4.0"
 indymilter = "0.2.0"
 ipnet = "2.8.0"
 log = "0.4.20"
 once_cell = "1.18.0"
-regex = "1.9.5"
+regex = "1.10.2"
 signal-hook = "0.3.17"
 signal-hook-tokio = { version = "0.3.1", features = ["futures-v0_3"] }
 syslog = "6.1.0"
-tokio = { version = "1.32.0", features = ["fs", "macros", "net", "rt", "rt-multi-thread", "sync"] }
-viadkim = "0.0.6"
+tokio = { version = "1.33.0", features = ["fs", "macros", "net", "rt", "rt-multi-thread", "sync"] }
+viadkim = "0.0.7"
 # viadkim = { path = "../viadkim" }
 
 [dev-dependencies]
-indymilter-test = "0.1.0"
+indymilter-test = { version = "0.1.0", features = ["regex"] }
 
 [features]
 # Reverts cryptographic algorithm and key usage to before RFC 8301.

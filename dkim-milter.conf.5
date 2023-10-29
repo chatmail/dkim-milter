@@ -7,26 +7,95 @@ dkim-milter.conf \- DKIM Milter configuration file
 .I dkim-milter.conf
 is the configuration file for DKIM Milter.
 .BR dkim-milter (8)
-is a milter application that signs or verifies messages using
+is a milter application that signs and verifies messages using
 .I DomainKeys Identified Mail
-signatures.
+signatures (RFC\~6376).
 .PP
-To do:
+DKIM Milter accepts incoming connections from the MTA, and then handles each
+message transaction in either signing mode or verifying mode.
+That is, it either signs the message, or verifies the message’s signatures
+according to the configuration.
+The decision whether the message should undergo signing or verification is made
+in the following way:
+If a message comes from a
+.I trusted source
+and is submitted by an
+.I originator
+that matches a configured
+.IR "signing sender" ,
+then the message is signed.
+If a message comes from an untrusted source, it is verified instead.
+Trusted sources and signing senders are configured with parameters
+.BR trusted_networks ,
+.BR trust_authenticated_senders ,
+and
+.BR signing_senders .
+The originator of a message is taken from the message’s
+.I Sender
+header if present, else from the message’s
+.I From
+header.
 .PP
-Explain how message transactions are handled in either signing mode or verifying
-mode, how trusted sources are determined, what originators and signing senders
-are.
-.PP
-Explain when and how configuration is read: eagerly at startup, exists entirely
-in memory, file system not accessed after reading, reloading rereads and
-replaces in-memory configuration.
-.PP
-Explain overriding: main configuration, overridable params in sections signing
-and verification, precedence of overriding.
+The configuration file format uses a flat key–value scheme with one parameter
+per line.
+Key and value are separated with the character
+.BR = .
+Whitespace before and after key and value is not significant.
+Blank lines and lines whose first non-blank character is
+.B #
+are ignored.
+Configuration files are read eagerly at startup, afterwards configuration exists
+in memory, the file system is not accessed during operation.
+Configuration can be reloaded from disk during operation by sending the signal
+.B SIGHUP
+to the milter process.
+If reloading fails, an error is logged and the in-memory configuration remains
+active.
+A small set of parameters configured at program start cannot be reloaded: the
+parameters
+.BR socket ,
+.BR log_destination ,
+.BR log_level ,
+and
+.BR syslog_facility .
+Options passed on the command-line are also not reloaded.
 .SH PARAMETERS
 This section lists all configuration parameters available in the three
 categories “General”, “Signing”, and “Verification” in alphabetical order.
+.PP
 Possible values for each parameter are given in parentheses.
+Below, a
+.I boolean
+value is either
+.B yes
+or
+.B no
+(alias
+.B true
+and
+.BR false ).
+A
+.I duration
+is an integer optionally followed by
+.B d
+(days),
+.B h
+(hours),
+.B m
+(minutes), or
+.B s
+(seconds; the default unit).
+A
+.I colon-separated
+value is a possibly empty list or set of elements separated by “:”.
+A
+.I table
+is a (path to a) table: a file containing lines with whitespace-separated
+columns of table-specific data.
+As in configuration files, blank lines and lines whose first non-blank character
+is
+.B #
+are ignored in tables.
 .SS General parameters
 General parameters allow configuration of basic properties of DKIM Milter.
 These parameters are available only in the main configuration file.
@@ -47,8 +116,15 @@ value.
 Defaults to the MTA’s hostname (the value of the sendmail macro
 .BR j ).
 .TP
-.BR connection_overrides " (\fIpath\fR)"
-File path to the table listing per-connection configuration overrides.
+.BR connection_overrides " (\fItable\fR)"
+File path to a table listing per-connection configuration overrides.
+The table should list, in whitespace-separated columns, (1) a network address,
+(2) the path to a configuration file, prefixed with “<”, containing signing and
+verification parameters.
+.IP
+When processing a message, if one or more entries match the connecting IP
+address, their associated configuration parameters override the main
+configuration settings.
 .TP
 .BR delete_incoming_authentication_results " (\fIboolean\fR)"
 Whether to delete incoming
@@ -58,24 +134,83 @@ header fields whose
 matches the
 .B authserv_id
 setting.
+When this setting is enabled,
+.I Authentication-Results
+headers purporting to carry results from this authentication service (that is,
+forged results) are deleted.
+.I Authentication-Results
+headers with a foreign
+.I authserv-id
+pass through unaltered.
+The default is
+.BR yes .
 .TP
 .BR dry_run " (\fIboolean\fR)"
 Whether to take action or apply modifications during processing.
+When this setting is enabled, the normal signing and verification logic is
+performed, but no messages are rejected at the SMTP level, and no headers are
+added to or deleted from messages.
+The default is
+.BR no .
 .TP
 .BR log_destination " (" syslog " | " stderr )
 The destination for log messages.
+Log destination
+.B syslog
+causes log messages to be written to the system logger.
+Log destination
+.B stderr
+causes log messages to be written to standard error.
+This setting cannot be reloaded.
+The default is
+.BR syslog .
 .TP
 .BR log_level " (" error " | " warn " | " info " | " debug )
 The minimum severity level of messages to log.
+The log levels are, in descending severity order and with the conventional
+meaning,
+.BR error ,
+.BR warn ,
+.BR info ,
+and
+.BR debug .
+This setting cannot be reloaded.
+The default is
+.BR info .
 .TP
 .BR lookup_timeout " (\fIduration\fR)"
 Maximum time to allow when querying for DKIM public key records.
+The default is
+.BR 10s .
 .TP
 .BR mode " (" auto " | " sign " | " verify )
 The milter’s operating mode.
+In mode
+.BR auto ,
+messages are either signed or verified according to the decision algorithm
+described further above.
+In mode
+.BR sign ,
+the milter performs signing for trusted senders configured for signing, but does
+not perform verification.
+In mode
+.BR verify ,
+the milter performs verification for untrusted senders, but does not sign.
+The default is
+.BR auto .
 .TP
-.BR recipient_overrides " (\fIpath\fR)"
-File path to the table listing per-recipient configuration overrides.
+.BR recipient_overrides " (\fItable\fR)"
+File path to a table listing per-recipient configuration overrides.
+The table should list, in whitespace-separated columns, (1) a recipient
+expression (the same format as a sender expression, see below), (2) the path to
+a configuration file, prefixed with “<”, containing signing and verification
+parameters.
+.IP
+When processing a message, if one or more entries match one or more envelope
+recipient addresses (SMTP command
+.IR "RCPT TO" ),
+their associated configuration parameters override the main configuration
+settings.
 .TP
 .BR require_envelope_sender_match " (\fIboolean\fR)"
 Whether to accept for signing only senders (in the
@@ -91,58 +226,175 @@ header will be used for the signing senders lookup even if it differs from the
 envelope address.
 This parameter is intended to prevent cross-user signing, where one (trusted)
 user would be able to use signing key and configuration for a different user.
-The default is false.
+The default is
+.BR no .
 .TP
-.BR signing_keys " (\fIpath\fR)"
-File path to the table listing the available signing keys.
+.BR signing_keys " (\fItable\fR)"
+File path to a table listing the available signing keys.
+The table should list, in whitespace-separated columns, (1) a unique, arbitrary
+key name, (2) the path to a PKCS#8 PEM file, prefixed with “<”, containing an
+RSA or Ed25519 signing key.
+.IP
+When signing a message, if an entry is selected via its key name, then the
+associated signing key is used to produce the cryptographic signature.
 .TP
-.BR signing_senders " (\fIpath\fR)"
-File path to the table listing the available signing senders.
+.BR signing_senders " (\fItable\fR)"
+File path to a table listing the available signing senders.
+The table should list, in whitespace-separated columns, (1) a sender expression,
+(2) a domain name or an identity expression, (3) a selector, (4) a key name
+listed in the
+.B signing_keys
+table, (5) optionally, the path to a configuration file, prefixed with “<”,
+containing signing parameters.
+.IP
+A sender expression may be (a) a domain name, (b) a domain name prefixed with
+“.”, which will match both the domain and all subdomains, (c) a glob pattern,
+that is a string where occurrences of “*” will match arbitrary substrings.
+An identity expression is an email address where the local-part may be omitted,
+that is
+.RI [ local-part "]\fB@\fR" domain .
+In an identity expression the domain may contain one occurrence of “..” (for
+example,
+.BR @mail..example.com ),
+this is treated as the cut between
+.I d=
+tag domain
+.RB ( d=example.com )
+and
+.I i=
+tag subdomain
+.RB ( i=@mail.example.com ),
+see below.
+In column (2), a single dot (if an identity expression, a single dot after the
+“@”) copies the domain of the matched sender address; a single dot before the
+“@” copies the local-part of the matched sender address.
+.IP
+When signing a message, each entry matching an originator email address (in the
+.I Sender
+or
+.I From
+header) will result in a signature being produced and attached to the message.
+Columns (2) and (3) are used to produce the
+.I d=
+and
+.I s=
+tags.
+If column (2) contains an identity expression it also produces the
+.I i=
+tag.
+The signing key referred to by name in column (4) is used to calculate the
+cryptographic signature.
+Finally, the optional associated signing configuration parameters in column (5)
+override the main configuration settings.
 .TP
 .BR socket " (\fIsocket-spec\fR)"
-The listening socket to open for the connection from the MTA.
+The listening socket of the milter.
+This parameter is mandatory.
+The
+.I socket-spec
+string is a description of the socket that the milter should open for the
+connection from the MTA.
+It can be either an IPv4/IPv6 TCP socket in the form
+.BI inet: host : port
+(for example,
+.BR inet:localhost:3000 ),
+or a UNIX domain socket in the form
+.BI unix: path
+(for example,
+.BR unix:/run/dkim-milter.sock ).
+This setting cannot be reloaded.
 .TP
 .BR syslog_facility " (\fIfacility\fR)"
 The facility to use for syslog messages.
+The facility must be one of the named facilities defined by syslog (in lower
+case minus the
+.B LOG_
+prefix).
+See
+.BR syslog (3).
+This setting cannot be reloaded.
+The default is
+.BR mail .
 .TP
 .BR trust_authenticated_senders " (\fIboolean\fR)"
-Whether to treat message transactions from authenticated senders as eligible for
+Whether message transactions from authenticated senders are eligible for
 signing.
+The default is
+.BR yes .
 .TP
 .BR trusted_networks " (\fInetworks\fR)"
-Comma-separated list of network addresses in CIDR notation whose message
-transactions are eligible for signing.
+Comma-separated list of network addresses whose message transactions are
+eligible for signing.
+Network addresses are IPv4 or IPv6 addresses and networks in CIDR notation.
+The shorthand token
+.B loopback
+can be included to trust connections from any loopback address.
+The default is
+.BR loopback .
 .SS Signing parameters
 Signing parameters allow configuration of the signing process.
 They apply when a message transaction is handled in signing mode.
-These parameters can be overridden per connection, recipient, and/or sender.
+These parameters can be overridden per connection, recipient, and sender.
+.TP
+.BR ascii_only_signatures " (\fIboolean\fR)"
+Whether to only emit ASCII characters in signatures.
+This parameter is mainly intended to improve interoperation when signing for an
+internationalized, Unicode domain.
+The default is
+.BR no .
 .TP
 .BR canonicalization " (\fIcanonicalization\fR)"
 The canonicalization algorithm to use in the
 .I c=
 tag.
+The default is
+.BR relaxed/simple .
 .TP
 .BR copy_headers " (\fIboolean\fR)"
-Whether to record the headers seen in the original message in the
+Whether to record the header fields seen in the original message in the
 .I z=
 tag.
+The default is
+.BR no .
 .TP
 .BR default_signed_headers " (\fIcolon-separated\fR)"
-The default set of signed headers.
+The default set of headers to sign.
+This set is used for value
+.B default
+in parameter
+.BR sign_headers .
+The default is currently not documented, but follows recommendations in
+RFC\~6376, section 5.4.1.
 .TP
 .BR default_unsigned_headers " (\fIcolon-separated\fR)"
 The default set of headers to exclude from being signed.
+This set is used for value
+.B all
+in parameter
+.BR sign_headers .
+The default is currently not documented, but follows recommendations in
+RFC\~6376, section 5.4.1.
 .TP
-.BR expire_after " (\fIduration\fR)"
+.BR expiration " (\fIduration\fR | " never )
 The validity period to declare in the
 .I x=
 tag.
+The token
+.B never
+suppresses inclusion of an
+.I x=
+tag.
+The default is
+.BR 5d .
 .TP
 .BR hash_algorithm " (" sha256 " | " sha1 )
 The hash algorithm to use in the
 .I a=
 tag.
-The value
+The default is
+.BR sha256 .
+.IP
+Value
 .B sha1
 is only available if DKIM Milter was compiled with the legacy compatibility
 feature “pre-rfc8301”.
@@ -151,36 +403,43 @@ feature “pre-rfc8301”.
 Whether to record the length of the signed message content in the
 .I l=
 tag.
+The default is
+.BR no .
 .TP
-.BR oversigned_headers " (\fIoversigned-headers\fR)"
+.BR oversign_headers " (\fIoversigned-headers\fR)"
 Headers to oversign, that is, sign once more than actually present and signed.
 The given value may be in one of the following formats:
 .BR signed ,
 oversign all headers already selected for signing.
 .BR signed-extended ,
 oversign all headers already selected for signing plus all headers configured in
-.BR signed_headers ,
+.BR sign_headers ,
 even if they are not present in the message header and so were not selected for
 signing.
 .IR colon-separated ,
 the listed colon-separated headers.
+The default is empty.
 .TP
 .BR request_reports " (\fIboolean\fR)"
 Whether to include the extension tag
 .I r=y
 in the signature, in order to signal interest in DKIM Failure Reports
 (RFC\~6651).
+The default is
+.BR no .
 .TP
-.BR signed_headers " (\fIsigned-headers\fR)"
+.BR sign_headers " (\fIsigned-headers\fR)"
 Headers to include in the signature.
 The given value may be in one of the following formats:
 .BR default ,
-the default set of headers; optionally followed by a semicolon and additional,
+the default set of headers, optionally followed by a semicolon and additional,
 colon-separated headers to include.
 .BR all ,
 all headers present, minus the set of excluded headers.
 .IR colon-separated ,
 the listed colon-separated headers.
+The default is
+.BR default .
 .IP
 When a signature is prepared, the headers specified here are selected from the
 message’s header in order from the bottom up, that is, in evaluation order.
@@ -188,12 +447,14 @@ Of headers that occur multiple times, all instances are selected.
 .SS Verification parameters
 Verification parameters allow configuration of the verification process.
 They apply when a message transaction is handled in verifying mode.
-These parameters can be overridden per connection and/or recipient.
+These parameters can be overridden per connection and per recipient.
 .TP
 .BR allow_expired " (\fIboolean\fR)"
 Whether to evaluate expired signatures as passing.
 If this setting is disabled, expired signatures evaluate to result
 .IR policy .
+The default is
+.BR no .
 .TP
 .BR allow_sha1 " (\fIboolean\fR)"
 Whether to evaluate signatures using the SHA-1 hash algorithm.
@@ -201,6 +462,9 @@ If this setting is disabled, signatures using the SHA-1 hash algorithm always
 evaluate to result
 .IR policy ,
 regardless of the cryptographic validity of the signature.
+The default is
+.BR no .
+.IP
 This parameter is only effective if DKIM Milter was compiled with the legacy
 compatibility feature “pre-rfc8301”, else it is ignored and all SHA-1 signatures
 evaluate to
@@ -209,13 +473,21 @@ without being verified.
 .TP
 .BR allow_timestamp_in_future " (\fIboolean\fR)"
 Whether to evaluate signatures with a timestamp in the future as passing.
+The default is
+.BR no .
 .TP
 .BR forbid_unsigned_content " (\fIboolean\fR)"
 Whether to evaluate signatures that don’t cover the entire message body content
-as passing.
+as not passing.
+The default is
+.BR no .
 .TP
-.BR max_signatures " (\fIinteger\fR)"
+.BR max_signatures_to_verify " (\fIinteger\fR)"
 Maximum number of signatures to verify in a message.
+.I DKIM-Signature
+header fields are selected starting from the top.
+The default is
+.BR 10 .
 .TP
 .BR min_rsa_key_bits " (\fIinteger\fR)"
 The minimum allowed RSA key size in bits.
@@ -223,26 +495,28 @@ If a signature was created with an RSA key of a size below this threshold, the
 signature evaluates to result
 .IR policy ,
 regardless of the cryptographic validity of the signature.
+Note that there is an additional, mandated hard lower limit of 1024 for RSA key
+sizes, smaller sizes always evaluate to result
+.IR permerror ,
+independent of this setting.
+The default is
+.BR 1024 .
 .IP
-There is an additional hard lower limit for RSA key sizes, sizes below which
-evaluate to result
-.IR permerror .
-That limit is 1024; if DKIM Milter was compiled with the legacy compatibility
-feature “pre-rfc8301”, the limit is 512.
+If DKIM Milter was compiled with the legacy compatibility feature “pre-rfc8301”,
+the hard lower limit for RSA key sizes is 512.
 .TP
-.BR reject_failures " (\fIcomma-separated\fR: " missing ", " failing ", " author-mismatch )
+.BR reject_failures " (\fIcomma-separated\fR: " missing ", " no-pass ", " author-mismatch )
 The set of signature verification results to reject with an SMTP error reply.
 The value is a comma-separated set of the following failure specifications.
 .BR missing ,
 reject messages without DKIM signature.
-.BR failing ,
+.BR no-pass ,
 reject messages without a passing DKIM signature.
 .BR author-mismatch ,
 reject messages that don’t have a passing DKIM signature where the author domain
 found in the
 .I From
-header matches (that is, is equal to or a subdomain of) the signing domain in
-the signature’s
+header matches the signing domain in the signature’s
 .I d=
 tag.
 The failure specifications correspond to the three DKIM failure status codes
@@ -250,6 +524,7 @@ specified in RFC\~7372, section\~3.1.
 Note that a failing signature is treated as passing if the DKIM public key
 record is marked as being in test mode
 .RI ( t=y ).
+The default is empty.
 .IP
 According to RFC\~6376, section\~6.3 use of this parameter is discouraged.
 However, it may be useful when applied to certain known senders only, for
@@ -258,20 +533,19 @@ example, through an entry in
 .TP
 .BR required_signed_headers " (\fIcolon-separated\fR)"
 The set of headers required to be included in a signature.
-A bare header name requires the header to be included in a signature’s
+A bare header name requires that header to be included in a signature’s
 .I h=
 tag at least once.
-Appending
+A header name followed by
 .B +
-to the header name also requires that
+also requires that
 .I all
 instances of that header be signed.
-Appending
+A header name followed by
 .B *
-to the header name instead removes the requirement that the header be included,
-but if it is, then
+makes the header optional, but if it is included, then
 .I all
-included instances must be signed.
+instances must be signed.
 In conformance with RFC\~6376, the header
 .I From
 is always required to be included in a signature independent of this setting.
@@ -281,6 +555,8 @@ The default is
 .BR time_tolerance " (\fIduration\fR)"
 Time tolerance when evaluating timestamp and expiration in signatures, in order
 to allow for clock drift.
+The default is
+.BR 30s .
 .SH FILES
 .I /etc/dkim-milter/dkim-milter.conf
 .SH SEE ALSO

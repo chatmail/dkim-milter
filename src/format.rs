@@ -1,3 +1,19 @@
+// DKIM Milter – milter for DKIM signing and verification
+// Copyright © 2022–2023 David Bürgin <dbuergin@gluet.ch>
+//
+// This program is free software: you can redistribute it and/or modify it under
+// the terms of the GNU General Public License as published by the Free Software
+// Foundation, either version 3 of the License, or (at your option) any later
+// version.
+//
+// This program is distributed in the hope that it will be useful, but WITHOUT
+// ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
+// FOR A PARTICULAR PURPOSE. See the GNU General Public License for more
+// details.
+//
+// You should have received a copy of the GNU General Public License along with
+// this program. If not, see <https://www.gnu.org/licenses/>.
+
 use std::{
     borrow::Cow,
     cmp,
@@ -8,9 +24,8 @@ use std::{
 };
 use viadkim::signature::DomainName;
 
-// TODO lots of code copied from SPF Milter
+// Note: Some things copied from SPF Milter, may consolidate later.
 
-// TODO consider not using viadkim's DomainName here?
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MailAddr {
     pub local_part: String,
@@ -205,6 +220,15 @@ fn parse_addr_spec(input: &str) -> Option<(AddrSpec, &str)> {
     let s = s.strip_prefix('@')?;
 
     let s = strip_cfws(s).unwrap_or(s);
+
+    // For both domain names and literals, require that the value be parsable as
+    // a `DomainName` or `IpAddr`, which is stricter than what is syntactically
+    // possible.
+    // Compare RFC 5322, section 3.4.1: ‘A liberal syntax for the domain portion
+    // of addr-spec is given here. However, the domain portion contains
+    // addressing information […]. It is therefore incumbent upon
+    // implementations to conform to the syntax of addresses for the context in
+    // which they are used.’
 
     let (domain_part, rest) = if let Some(rest) = strip_dot_atom(s) {
         let domain = strip_suffix(s, rest);
@@ -464,6 +488,10 @@ fn strip_ctext_loose(input: &[u8]) -> Option<&[u8]> {
 
 fn is_ctext_loose(c: &u8) -> bool {
     c.is_ascii_graphic() && !matches!(c, b'(' | b')' | b'\\') || !c.is_ascii()
+}
+
+pub fn is_dot_atom(s: &str) -> bool {
+    matches!(strip_dot_atom(s), Some(s) if s.is_empty())
 }
 
 // dot-atom = [CFWS] dot-atom-text [CFWS]

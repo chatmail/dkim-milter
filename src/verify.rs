@@ -1,3 +1,19 @@
+// DKIM Milter – milter for DKIM signing and verification
+// Copyright © 2022–2023 David Bürgin <dbuergin@gluet.ch>
+//
+// This program is free software: you can redistribute it and/or modify it under
+// the terms of the GNU General Public License as published by the Free Software
+// Foundation, either version 3 of the License, or (at your option) any later
+// version.
+//
+// This program is distributed in the hope that it will be useful, but WITHOUT
+// ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
+// FOR A PARTICULAR PURPOSE. See the GNU General Public License for more
+// details.
+//
+// You should have received a copy of the GNU General Public License along with
+// this program. If not, see <https://www.gnu.org/licenses/>.
+
 use crate::{
     auth_results,
     config::{
@@ -38,14 +54,14 @@ impl Verifier {
 
         let lookup_timeout = config.lookup_timeout;
 
-        let x = connection_overrides.merged_with(recipient_overrides);
-        let vconfig = config.verification_config.merged_with(&x);
+        let c = connection_overrides.merged_with(recipient_overrides);
+        let vconfig = config.verification_config.merged_with(&c);
 
         let allow_expired = vconfig.allow_expired;
         let allow_sha1 = vconfig.allow_sha1;
         let allow_timestamp_in_future = vconfig.allow_timestamp_in_future;
         let forbid_unsigned_content = vconfig.forbid_unsigned_content;
-        let max_signatures = vconfig.max_signatures;
+        let max_signatures = vconfig.max_signatures_to_verify;
         let min_key_bits = vconfig.min_rsa_key_bits;
         let time_tolerance = vconfig.time_tolerance;
         let (headers_required_in_signature, headers_forbidden_to_be_unsigned) =
@@ -151,13 +167,13 @@ impl Verifier {
                 }
                 SigStatus::Passing => {
                     // check for PassingFrom and upgrade if appropriate
-                    if sig.status == VerificationStatus::Success || is_testing {
-                        if is_author_matched_domain(sig.signature.as_ref(), from_addresses) {
-                            sig_status = SigStatus::PassingFrom;
-                        }
+                    if (sig.status == VerificationStatus::Success || is_testing)
+                        && is_author_matched_domain(sig.signature.as_ref(), from_addresses)
+                    {
+                        sig_status = SigStatus::PassingFrom;
                     }
                 }
-                SigStatus::PassingFrom => {}  // no-op
+                SigStatus::PassingFrom => {}
             }
 
             // now log
@@ -187,7 +203,7 @@ impl Verifier {
             info!(
                 "{id}: {}: {}{}",
                 get_domain_from_verification_result(sig),
-                sig.status.to_dkim_auth_result(),
+                sig.status.to_dkim_result(),
                 comment
             );
         }
@@ -200,16 +216,16 @@ impl Verifier {
 
         if rejects.contains(&RejectFailure::Missing) && sig_status == SigStatus::Missing {
             if config.dry_run {
-                debug!("{id}: rejected message missing signature [dry run, not done]");
+                debug!("{id}: rejected message without signature [dry run, not done]");
                 return Ok(Status::Continue);
             } else {
-                debug!("{id}: rejected message missing signature");
+                debug!("{id}: rejected message without signature");
                 reply.set_error_reply("550", Some("5.7.20"), ["No DKIM signature found"])?;
                 return Ok(Status::Reject);
             }
         }
 
-        if rejects.contains(&RejectFailure::Failing) && sig_status == SigStatus::Failing {
+        if rejects.contains(&RejectFailure::NoPass) && sig_status == SigStatus::Failing {
             if config.dry_run {
                 debug!("{id}: rejected message without acceptable signature [dry run, not done]");
                 return Ok(Status::Continue);
@@ -270,14 +286,14 @@ fn make_signed_headers_specs(
     (headers_required_in_signature, headers_forbidden_to_be_unsigned)
 }
 
-pub fn get_domain_from_verification_result(res: &VerificationResult) -> String {
-    // TODO convert to U-form
+fn get_domain_from_verification_result(res: &VerificationResult) -> String {
     match &res.signature {
         Some(s) => s.domain.to_string(),
         None => {
             if let VerificationStatus::Failure(VerificationError::DkimSignatureFormat(e)) =
                 &res.status
             {
+                // Consider sanitising an odd-shaped domain here.
                 if let Some(d) = &e.domain_str {
                     return d.as_ref().into();
                 }
@@ -469,22 +485,16 @@ fn compute_signature_prefixes_internal(
     result
 }
 
-fn is_author_matched_domain(
-    sig: Option<&DkimSignature>,
-    from_addresses: &[MailAddr],
-) -> bool {
+// Note: in OpenDKIM, this concept is called an ‘author signature’.
+fn is_author_matched_domain(sig: Option<&DkimSignature>, from_addresses: &[MailAddr]) -> bool {
     let domain = match sig {
-        Some(sig) => &sig.domain,
+        Some(sig) => sig.domain.to_ascii(),
         None => return false,
     };
 
-    for addr in from_addresses {
-        if addr.domain.eq_or_subdomain_of(domain) {
-            return true;
-        }
-    }
-
-    false
+    from_addresses
+        .iter()
+        .any(|addr| addr.domain.to_ascii().eq_ignore_ascii_case(&domain))
 }
 
 #[cfg(test)]

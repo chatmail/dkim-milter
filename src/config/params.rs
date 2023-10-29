@@ -1,3 +1,19 @@
+// DKIM Milter – milter for DKIM signing and verification
+// Copyright © 2022–2023 David Bürgin <dbuergin@gluet.ch>
+//
+// This program is free software: you can redistribute it and/or modify it under
+// the terms of the GNU General Public License as published by the Free Software
+// Foundation, either version 3 of the License, or (at your option) any later
+// version.
+//
+// This program is distributed in the hope that it will be useful, but WITHOUT
+// ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
+// FOR A PARTICULAR PURPOSE. See the GNU General Public License for more
+// details.
+//
+// You should have received a copy of the GNU General Public License along with
+// this program. If not, see <https://www.gnu.org/licenses/>.
+
 use crate::config::{
     format::ParseParamError,
     model::{
@@ -121,8 +137,8 @@ pub fn parse_field_names(s: &str) -> Result<Vec<SignedFieldName>, ParseParamErro
     let mut seen = HashSet::new();
 
     // A trailing colon is allowed for disambiguation. For example, if someone
-    // configures `oversigned_headers = signed`, `signed` is a special token; if
-    // someone configures `oversigned_headers = signed:`, `signed` is a literal
+    // configures `oversign_headers = signed`, `signed` is a special token; if
+    // someone configures `oversign_headers = signed:`, `signed` is a literal
     // header name.
     for s in split_at_colon(s) {
         let s = s?;
@@ -151,12 +167,10 @@ pub fn parse_qualified_field_names(s: &str) -> Result<Vec<SignedFieldNameWithQua
         // But what if some poor soul wants to specify a header named literally
         // "Bla++" or some such? No, this is not supported.
         let qualifier = if let Some(rest) = s.strip_suffix('+') {
-            // TODO strip ws
-            s = rest.trim();
+            s = rest.trim_end();
             Plus
         } else if let Some(rest) = s.strip_suffix('*') {
-            // TODO strip ws
-            s = rest.trim();
+            s = rest.trim_end();
             Asterisk
         } else {
             Bare
@@ -201,8 +215,7 @@ pub fn parse_expiration(s: &str) -> Result<Expiration, ParseParamError> {
     let duration = parse_duration_secs(s)?;
 
     if duration.is_zero() {
-        // TODO rename error
-        return Err(ParseParamError::InvalidExpiration(s.into()));
+        return Err(ParseParamError::InvalidDuration(s.into()));
     }
 
     Ok(Expiration::After(duration))
@@ -211,26 +224,21 @@ pub fn parse_expiration(s: &str) -> Result<Expiration, ParseParamError> {
 // Parse a duration from u32-sized seconds. Resolution in seconds, subsecond
 // component not used.
 pub fn parse_duration_secs(input: &str) -> Result<Duration, ParseParamError> {
-    let seconds = if let Some(s) = input.strip_suffix('d') {
-        let days = u32::from_str(s.trim_end())
-            .map_err(|_| ParseParamError::InvalidDuration(input.into()))?;
-        days.checked_mul(24 * 60 * 60)
-            .ok_or_else(|| ParseParamError::InvalidDuration(input.into()))?
+    let (s, factor) = if let Some(s) = input.strip_suffix('d') {
+        (s, 24 * 60 * 60)
     } else if let Some(s) = input.strip_suffix('h') {
-        let hours = u32::from_str(s.trim_end())
-            .map_err(|_| ParseParamError::InvalidDuration(input.into()))?;
-        hours.checked_mul(60 * 60)
-            .ok_or_else(|| ParseParamError::InvalidDuration(input.into()))?
+        (s, 60 * 60)
     } else if let Some(s) = input.strip_suffix('m') {
-        let minutes = u32::from_str(s.trim_end())
-            .map_err(|_| ParseParamError::InvalidDuration(input.into()))?;
-        minutes.checked_mul(60)
-            .ok_or_else(|| ParseParamError::InvalidDuration(input.into()))?
+        (s, 60)
     } else {
         let s = input.strip_suffix('s').unwrap_or(input);
-        u32::from_str(s.trim_end())
-            .map_err(|_| ParseParamError::InvalidDuration(input.into()))?
+        (s, 1)
     };
+
+    let seconds = u32::from_str(s.trim_end())
+        .map_err(|_| ParseParamError::InvalidDuration(input.into()))?
+        .checked_mul(factor)
+        .ok_or_else(|| ParseParamError::InvalidDuration(input.into()))?;
 
     Ok(Duration::from_secs(seconds.into()))
 }
@@ -242,7 +250,7 @@ pub fn parse_reject_failures(s: &str) -> Result<RejectFailures, ParseParamError>
         let value = value?;
         let value = match value {
             "missing" => RejectFailure::Missing,
-            "failing" => RejectFailure::Failing,
+            "no-pass" => RejectFailure::NoPass,
             "author-mismatch" => RejectFailure::AuthorMismatch,
             _ => return Err(ParseParamError::InvalidRejectFailure(value.into())),
         };
@@ -357,5 +365,14 @@ mod tests {
         );
 
         assert!(parse_oversigned_headers("signed::").is_err());
+    }
+
+    #[test]
+    fn parse_duration_secs_ok() {
+        assert_eq!(parse_duration_secs("33").unwrap(), Duration::from_secs(33));
+        assert_eq!(
+            parse_duration_secs("34 m").unwrap(),
+            Duration::from_secs(34 * 60)
+        );
     }
 }

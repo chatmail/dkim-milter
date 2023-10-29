@@ -4,11 +4,12 @@ pub use common::*;
 
 use indymilter_test::*;
 use log::debug;
+use regex::Regex;
 
 #[tokio::test]
-async fn basic_sign_both() {
+async fn basic_sign_multi() {
     let mut opts = default_cli_options();
-    opts.config_file = Some("tests/sign_both/dkim-milter.conf".into());
+    opts.config_file = Some("tests/sign_multiple/dkim-milter.conf".into());
 
     let config = read_config(opts).await.unwrap();
 
@@ -61,6 +62,18 @@ Thank you,
     assert_eq!(status, Status::Continue);
 
     debug!("EOM replies: {:?}", actions);
+
+    assert!(actions.has_insert_header(
+        0,
+        "DKIM-Signature",
+        &Regex::new("d=gluet.ch; s=sel1; a=rsa-sha256").unwrap(),
+    ));
+
+    assert!(actions.has_insert_header(
+        0,
+        "DKIM-Signature",
+        &Regex::new("d=gluet.ch; s=sel2; a=ed25519-sha256").unwrap(),
+    ));
 
     conn.close().await.unwrap();
 

@@ -1,2 +1,0 @@
-key1 <tests/sign_both/rsa.pem
-key2 <tests/sign_both/ed25519.pem

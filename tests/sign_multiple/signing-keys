@@ -1,0 +1,2 @@
+key1 <tests/sign_multiple/rsa.pem
+key2 <tests/sign_multiple/ed25519.pem

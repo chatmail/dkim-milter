@@ -9,7 +9,7 @@ use log::debug;
 #[ignore = "depends on live DNS records"]
 async fn verify_live() {
     let mut opts = default_cli_options();
-    opts.config_file = Some("tests/verify_live/dkim-milter.conf".into());
+    opts.config_file = Some("tests/live/dkim-milter.conf".into());
 
     let config = read_config(opts).await.unwrap();
 

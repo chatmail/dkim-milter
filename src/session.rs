@@ -1,7 +1,23 @@
+// DKIM Milter – milter for DKIM signing and verification
+// Copyright © 2022–2023 David Bürgin <dbuergin@gluet.ch>
+//
+// This program is free software: you can redistribute it and/or modify it under
+// the terms of the GNU General Public License as published by the Free Software
+// Foundation, either version 3 of the License, or (at your option) any later
+// version.
+//
+// This program is distributed in the hope that it will be useful, but WITHOUT
+// ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
+// FOR A PARTICULAR PURPOSE. See the GNU General Public License for more
+// details.
+//
+// You should have received a copy of the GNU General Public License along with
+// this program. If not, see <https://www.gnu.org/licenses/>.
+
 use crate::{
     auth_results,
     config::{
-        model::{ConfigOverrides, OpMode, PartialSigningConfig, SigningSenders},
+        model::{ConfigOverrides, DomainExpr, OpMode, PartialSigningConfig, SigningSenders},
         Config, SessionConfig,
     },
     format::{self, AddrSpec, MailAddr},
@@ -147,8 +163,9 @@ impl Session {
         // convert milter newlines to SMTP CRLF
         let value = util::normalize_to_crlf(&value);
 
-        // count and limit amount of header data that can be accumulated (DoS)
-        const MAX_HEADER_LEN: usize = 512_000;
+        // Count and limit amount of header data that can be accumulated
+        // (compare OpenDKIM max size 64*1024).
+        const MAX_HEADER_LEN: usize = 256 * 1024;
 
         // name + ':' + value + CRLF
         message.header_bytes = message.header_bytes.saturating_add(name.len() + value.len() + 3);
@@ -201,7 +218,7 @@ impl Session {
 
             if let Some(incoming_aid) = auth_results::extract_authserv_id(&value) {
                 let aid = authserv_id(config, self.conn.hostname());
-                if eq_authserv_ids(aid, &incoming_aid) {
+                if eq_authserv_ids(id, aid, &incoming_aid) {
                     debug!(
                         "{id}: recognized own authserv-id in incoming Authentication-Results header instance {}",
                         message.auth_results_i
@@ -210,7 +227,7 @@ impl Session {
                 }
             } else {
                 debug!(
-                    "{id}: failed to parse incoming Authentication-Results header instance {}",
+                    "{id}: could not parse incoming Authentication-Results header instance {}",
                     message.auth_results_i
                 );
             }
@@ -267,7 +284,7 @@ impl Session {
         let authorized = is_trusted_sender(id, config, self.conn.ip, message.auth);
 
         let mode = match (config.mode, authorized) {
-            (OpMode::Sign | OpMode::Auto, Authorization::Trusted) => {
+            (OpMode::Sign | OpMode::Auto, Auth::Trusted) => {
                 let sender = match extract_sender(id, sender_address, from_addresses) {
                     Some(sender) => sender,
                     None => {
@@ -297,15 +314,7 @@ impl Session {
 
                 self.enter_signing_mode(id, headers, sender, matches).await?
             }
-            (OpMode::Sign, Authorization::Untrusted) => {
-                debug!("{id}: not signing message from untrusted sender");
-                return Ok(Status::Continue);
-            }
-            (OpMode::Verify, Authorization::Trusted) => {
-                debug!("{id}: not verifying message from trusted sender");
-                return Ok(Status::Continue);
-            }
-            (OpMode::Verify | OpMode::Auto, Authorization::Untrusted) => {
+            (OpMode::Verify | OpMode::Auto, Auth::Untrusted) => {
                 let from_addresses = match from_addresses {
                     Some(Ok(addrs)) => addrs.into_iter()
                         .filter_map(|addr| addr.into_mail_addr())
@@ -313,6 +322,14 @@ impl Session {
                     _ => vec![],
                 };
                 self.enter_verifying_mode(id, headers, from_addresses).await
+            }
+            (OpMode::Sign, Auth::Untrusted) => {
+                debug!("{id}: not signing message from untrusted sender");
+                return Ok(Status::Continue);
+            }
+            (OpMode::Verify, Auth::Trusted) => {
+                debug!("{id}: not verifying message from trusted sender");
+                return Ok(Status::Continue);
             }
         };
 
@@ -339,6 +356,7 @@ impl Session {
             get_recipient_overrides(recipients, &self.session_config.config);
 
         let signer = Signer::init(
+            id,
             &self.session_config.config,
             headers,
             &sender,
@@ -402,9 +420,19 @@ impl Session {
 
         let config = &self.session_config.config;
 
+        // Like OpenDKIM, delete Authentication-Results headers only when
+        // verifying, ie when we are about to add our own such header.
         if config.delete_incoming_authentication_results {
-            delete_auth_results_headers(actions, config, id, message.auth_results_deletions)
-                .await?;
+            match &message.mode {
+                Mode::Verifying(_) => {
+                    delete_auth_results_headers(actions, config, id, message.auth_results_deletions)
+                        .await?;
+                }
+                _ if !message.auth_results_deletions.is_empty() => {
+                    debug!("{id}: not deleting Authentication-Results headers when not in verifying mode");
+                }
+                _ => {}
+            }
         }
 
         match message.mode {
@@ -436,17 +464,17 @@ fn trim_env_address(env_addr: String) -> String {
     }
 }
 
-// TODO copied from SPF Milter
-fn eq_authserv_ids(id1: &str, id2: &str) -> bool {
-    fn to_unicode(s: &str) -> String {
+// Copied from SPF Milter, consolidate later.
+fn eq_authserv_ids(id: &str, aid1: &str, aid2: &str) -> bool {
+    let to_unicode = |s| {
         let (result, e) = idna::domain_to_unicode(s);
         if e.is_err() {
-            debug!("validation error while converting domain \"{s}\" to Unicode");
+            debug!("{id}: validation error while converting domain \"{s}\" to Unicode");
         }
         result
-    }
+    };
 
-    to_unicode(id1) == to_unicode(id2)
+    to_unicode(aid1) == to_unicode(aid2)
 }
 
 // The header validation utility here allows partial checking for RFC 5322
@@ -556,11 +584,11 @@ pub fn validate_rfc5322(
     Ok(())
 }
 
-enum Authorization {
+enum Auth {
     Trusted, Untrusted
 }
 
-fn is_trusted_sender(id: &str, config: &Config, ip: Option<IpAddr>, authenticated: bool) -> Authorization {
+fn is_trusted_sender(id: &str, config: &Config, ip: Option<IpAddr>, authenticated: bool) -> Auth {
     match ip {
         Some(addr) => {
             if config.trusted_networks.contains(addr) {
@@ -569,24 +597,24 @@ fn is_trusted_sender(id: &str, config: &Config, ip: Option<IpAddr>, authenticate
                 } else {
                     debug!("{id}: message from trusted source: connection from trusted network address {addr}");
                 }
-                return Authorization::Trusted;
+                return Auth::Trusted;
             }
         }
         None => {
             // Like OpenDKIM, treat no IP as local connection.
             if config.trusted_networks.contains_loopback() {
                 debug!("{id}: message from trusted source: no IP address, presumed local connection");
-                return Authorization::Trusted;
+                return Auth::Trusted;
             }
         }
     }
 
     if config.trust_authenticated_senders && authenticated {
         debug!("{id}: message from trusted source: authenticated sender");
-        return Authorization::Trusted;
+        return Auth::Trusted;
     }
 
-    Authorization::Untrusted
+    Auth::Untrusted
 }
 
 // See RFC 5322, section 3.6.2 for details on the relationship of the Sender and
@@ -602,17 +630,20 @@ fn extract_sender(
 ) -> Option<MailAddr> {
     match sender_address {
         Some(Ok(addr)) => {
-            if let Some(addr) = addr.into_mail_addr() {
-                debug!("{id}: using originator in Sender header: {addr}");
-                return Some(addr);
-            } else {
-                // TODO perhaps a literal Sender header should not fall back to From
-                debug!("{id}: originator address in Sender header is literal, falling back to From");
+            match addr.into_mail_addr() {
+                Some(addr) => {
+                    debug!("{id}: using originator in Sender header: {addr}");
+                    return Some(addr);
+                }
+                None => {
+                    debug!("{id}: originator address in Sender header is literal, falling back to From");
+                }
             }
         }
         Some(Err(_)) => {
-            // TODO perhaps a broken or repeated Sender header should not fall back to From
-            debug!("{id}: originator address in Sender header not usable, falling back to From");
+            // In case the Sender header is broken or repeated, give up.
+            debug!("{id}: originator address in Sender header not usable");
+            return None;
         }
         None => {}
     }
@@ -625,7 +656,7 @@ fn extract_sender(
                 .collect();
             match from_addresses.len() {
                 0 => {
-                    debug!("{id}: only literal addresses in From header, not usable");
+                    debug!("{id}: literal originator addresses in From header not usable");
                 }
                 1 => {
                     let addr = from_addresses.into_iter().next().unwrap();
@@ -633,7 +664,7 @@ fn extract_sender(
                     return Some(addr);
                 }
                 _ => {
-                    debug!("{id}: originator address in From header not usable");
+                    debug!("{id}: multiple originator addresses in From header not usable");
                 }
             }
         }
@@ -655,44 +686,30 @@ fn is_env_sender_match(env_sender: Option<&str>, sender: &MailAddr) -> bool {
         None => return true,
     };
 
-    // TODO
-    // try to compare directly
-    // try to compare after IDNA/case-normalise
+    // Try to compare the strings directly.
+    if env_sender.eq_ignore_ascii_case(&sender.to_string()) {
+        return true;
+    }
 
-    env_sender.eq_ignore_ascii_case(&sender.to_string())
+    // Else, try comparing after IDNA/case-normalise.
+
+    let MailAddr { local_part, domain } = sender;
+    let sender = format!("{local_part}@{}", domain.to_ascii());
+
+    if let Some(env_sender) = env_sender.rsplit_once('@').and_then(|(l, d)| {
+        let domain = DomainName::new(d).ok()?.to_ascii();
+        Some(format!("{l}@{domain}"))
+    }) {
+        env_sender.eq_ignore_ascii_case(&sender)
+    } else {
+        false
+    }
 }
 
 pub fn authserv_id<'a>(config: &'a Config, hostname: &'a str) -> &'a str {
     config.authserv_id.as_deref().unwrap_or(hostname)
 }
 
-#[derive(Clone, Debug)]
-pub enum DomainExpr {
-    Domain(DomainName),
-    SenderDomain,  // .
-    Identity(IdentityExpr),
-}
-
-#[derive(Clone, Debug)]
-pub struct IdentityExpr {
-    pub local_part: Option<LocalPartExpr>,
-    pub domain_part: IdentityDomainExpr,
-}
-
-#[derive(Clone, Debug)]
-pub enum LocalPartExpr {
-    LocalPart(String),
-    SenderLocalPart,  // .
-}
-
-#[derive(Clone, Debug)]
-pub enum IdentityDomainExpr {
-    Domain(DomainName),
-    SenderDomain,  // .
-    SplitDomain(Selector, DomainName),
-}
-
-// TODO move elsewhere
 #[derive(Clone, Debug)]
 pub struct SenderMatch {
     pub domain: DomainExpr,
@@ -701,17 +718,15 @@ pub struct SenderMatch {
     pub signing_config: Option<PartialSigningConfig>,
 }
 
-// TODO make async, may be DB lookup later
+// `async` because ultimately this might become a DB lookup.
 async fn find_matching_senders(
     signing_senders: &SigningSenders,
     sender: &MailAddr,
 ) -> Vec<SenderMatch> {
     let MailAddr { local_part, domain } = sender;
 
-    // TODO
-
-    let addr = format!("{local_part}@{domain}");
-    //let _domain: &str = domain.as_ref();
+    // Look up email address with domain-part converted to ASCII form.
+    let addr = format!("{local_part}@{}", domain.to_ascii());
 
     let mut matches = vec![];
 
@@ -720,7 +735,7 @@ async fn find_matching_senders(
             matches.push(SenderMatch {
                 domain: entry.domain.clone(),
                 selector: entry.selector.clone(),
-                key: entry.key_name.clone(),
+                key: entry.key.clone(),
                 signing_config: entry.signing_config.clone(),
             });
         }
@@ -734,7 +749,7 @@ fn get_connection_overrides(ip: Option<IpAddr>, config: &Config) -> ConfigOverri
 
     if let Some(connection_overrides) = &config.connection_overrides {
         if let Some(ip) = ip {
-            for entry in connection_overrides {
+            for entry in &connection_overrides.entries {
                 if entry.net.contains(&ip) {
                     result.merge(&entry.config);
                 }
@@ -750,10 +765,20 @@ fn get_recipient_overrides(recipients: &[String], config: &Config) -> ConfigOver
 
     if let Some(recipient_overrides) = &config.recipient_overrides {
         for recipient in recipients {
-            // TODO ensure is parsable as email addr
-            for overrides in &recipient_overrides.entries {
-                if overrides.expr.is_match(recipient) {
-                    result.merge(&overrides.config);
+            let recipient_ascii_domain = recipient.rsplit_once('@').and_then(|(l, d)| {
+                let domain = DomainName::new(d).ok()?.to_ascii();
+                Some(format!("{l}@{domain}"))
+            });
+
+            for entry in &recipient_overrides.entries {
+                if entry.expr.is_match(recipient) {
+                    // Does the expr match the recipient string directly?
+                    result.merge(&entry.config);
+                } else if let Some(recipient) = &recipient_ascii_domain {
+                    // Or does it match the recipient with normalised domain?
+                    if entry.expr.is_match(recipient) {
+                        result.merge(&entry.config);
+                    }
                 }
             }
         }
@@ -786,46 +811,48 @@ async fn delete_auth_results_headers(
     Ok(())
 }
 
-// TODO
 #[cfg(test)]
 mod tests {
     use super::*;
-    /*
-    use crate::config::SenderEntry;
+    use crate::config::model::SigningSender;
     use regex::Regex;
 
-    #[test]
-    fn find_matching_senders_ok() {
-        let domain = DomainName::new("example.com").unwrap();
+    #[tokio::test]
+    async fn find_matching_senders_ok() {
+        let domain = DomainExpr::Domain(DomainName::new("example.com").unwrap());
         let selector = Selector::new("sel1").unwrap();
-        let key_name = String::from("mykey1");
+        let signing_key = Arc::new(
+            SigningKey::from_pkcs8_pem(
+                "-----BEGIN PRIVATE KEY-----\n\
+                MC4CAQAwBQYDK2VwBCIEIH1M+KJ5Nln5QmygpruhNrykdHC9AwB8B7ACiiWMp/tQ\n\
+                -----END PRIVATE KEY-----",
+            )
+            .unwrap(),
+        );
 
         let signing_senders = SigningSenders {
-            entries: vec![
-                SenderEntry {
-                    sender_expr: Regex::new(".*@mail.example.com").unwrap(),
-                    domain: domain.clone(),
-                    selector: selector.clone(),
-                    key_name: key_name.clone(),
-                    signing_config: None,
-                }
-            ],
+            entries: vec![SigningSender {
+                sender_expr: Regex::new(".*@mail.example.com").unwrap(),
+                domain: domain.clone(),
+                selector: selector.clone(),
+                key: signing_key.clone(),
+                signing_config: None,
+            }],
         };
 
-        let from_address = MailAddr::new("itsame@mail.example.com").unwrap();
+        let from_address = MailAddr {
+            local_part: "itsame".into(),
+            domain: DomainName::new("mail.example.com").unwrap(),
+        };
 
-        let matches = find_matching_senders(&signing_senders, &from_address);
+        let matches = find_matching_senders(&signing_senders, &from_address).await;
 
-        assert_eq!(matches, vec![
-            SenderMatch {
-                domain,
-                selector,
-                key_name,
-                signing_config: None,
-            }
-        ]);
+        assert_eq!(matches.len(), 1);
+
+        let match_ = matches.into_iter().next().unwrap();
+
+        assert_eq!(match_.selector, selector);
     }
-    */
 
     #[test]
     fn validate_rfc5322_ok() {

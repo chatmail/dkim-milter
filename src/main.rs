@@ -1,6 +1,23 @@
+// DKIM Milter – milter for DKIM signing and verification
+// Copyright © 2022–2023 David Bürgin <dbuergin@gluet.ch>
+//
+// This program is free software: you can redistribute it and/or modify it under
+// the terms of the GNU General Public License as published by the Free Software
+// Foundation, either version 3 of the License, or (at your option) any later
+// version.
+//
+// This program is distributed in the hope that it will be useful, but WITHOUT
+// ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
+// FOR A PARTICULAR PURPOSE. See the GNU General Public License for more
+// details.
+//
+// You should have received a copy of the GNU General Public License along with
+// this program. If not, see <https://www.gnu.org/licenses/>.
+
 use dkim_milter::{CliOptions, Config, Socket, MILTER_NAME, VERSION};
 use futures::stream::StreamExt;
 use indymilter::Listener;
+use log::error;
 use signal_hook::consts::{SIGHUP, SIGINT, SIGTERM};
 use signal_hook_tokio::{Handle, Signals};
 use std::{
@@ -33,13 +50,12 @@ async fn main() {
     let config = match Config::read(opts).await {
         Ok(config) => config,
         Err(e) => {
-            // dbg!(&e);
             let _ = print_multiline_error(e);
             process::exit(1);
         }
     };
 
-    // TODO from here on, logging is available; use tracing macros?
+    // From here on, a logger has been installed and `log` macros can be used.
 
     let (reload_tx, reload) = mpsc::channel(1);
     let (shutdown_tx, shutdown) = oneshot::channel();
@@ -56,6 +72,7 @@ async fn main() {
             let listener = match TcpListener::bind(addr).await {
                 Ok(listener) => listener,
                 Err(e) => {
+                    error!("failed to bind TCP socket \"{addr}\": {e}");
                     let _ = writeln!(stderr(), "{PROGRAM_NAME}: could not bind TCP socket: {e}");
                     process::exit(1);
                 }
@@ -72,6 +89,7 @@ async fn main() {
             let listener = match UnixListener::bind(path) {
                 Ok(listener) => listener,
                 Err(e) => {
+                    error!("failed to create UNIX domain socket \"{path}\": {e}");
                     let _ = writeln!(stderr(), "{PROGRAM_NAME}: could not create UNIX domain socket: {e}");
                     process::exit(1);
                 }

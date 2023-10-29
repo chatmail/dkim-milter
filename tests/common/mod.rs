@@ -34,11 +34,11 @@ pub fn default_cli_options() -> CliOptions {
 }
 
 // Because each file in tests/ is compiled as its own crate, each integration
-// test file will have its own `Once` ensuring logging for those tests in that
+// test file will have its own `Once` ensuring logging for the tests in that
 // file is installed only once.
 static INIT_LOG: Once = Once::new();
 
-pub async fn read_config(opts: CliOptions) -> Result<Config, Box<dyn Error + 'static>> {
+pub async fn read_config(opts: CliOptions) -> Result<Config, Box<dyn Error>> {
     let config = StubConfig::read(opts).await?;
 
     INIT_LOG.call_once(|| config.install_static_logger().unwrap());
@@ -51,7 +51,7 @@ pub async fn read_config(opts: CliOptions) -> Result<Config, Box<dyn Error + 'st
 pub async fn read_config_with_lookup(
     opts: CliOptions,
     lookup: impl Fn(&str) -> LookupFuture + Send + Sync + 'static,
-) -> Result<Config, Box<dyn Error + 'static>> {
+) -> Result<Config, Box<dyn Error>> {
     let config = StubConfig::read(opts).await?;
 
     INIT_LOG.call_once(|| config.install_static_logger().unwrap());

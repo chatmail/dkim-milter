@@ -1,8 +1,23 @@
-// TODO `format` module name: file format? files? settings?
+// DKIM Milter – milter for DKIM signing and verification
+// Copyright © 2022–2023 David Bürgin <dbuergin@gluet.ch>
+//
+// This program is free software: you can redistribute it and/or modify it under
+// the terms of the GNU General Public License as published by the Free Software
+// Foundation, either version 3 of the License, or (at your option) any later
+// version.
+//
+// This program is distributed in the hope that it will be useful, but WITHOUT
+// ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
+// FOR A PARTICULAR PURPOSE. See the GNU General Public License for more
+// details.
+//
+// You should have received a copy of the GNU General Public License along with
+// this program. If not, see <https://www.gnu.org/licenses/>.
+
 pub mod format;
-pub mod reload;
 pub mod model;
 pub mod params;
+pub mod reload;
 pub mod tables;
 
 pub use reload::reload;
@@ -11,12 +26,12 @@ use crate::{
     config::{
         format::{ParseConfigError, ValidationError},
         model::{
-            LogDestination, LogLevel, OpMode, OverrideEntries, OverrideNetworkEntry, SigningConfig,
-            SigningSenders, Socket, SyslogFacility, TrustedNetworks, VerificationConfig,
+            ConnectionOverrides, LogDestination, LogLevel, OpMode, RecipientOverrides,
+            SigningConfig, SigningSenders, Socket, SyslogFacility, TrustedNetworks,
+            VerificationConfig,
         },
     },
-    resolver::{DomainResolver, Resolver},
-    MockLookupTxt,
+    resolver::{DomainResolver, MockLookupTxt, Resolver},
 };
 use std::{
     error::Error,
@@ -92,7 +107,6 @@ pub enum ConfigErrorKind {
     Validation(ValidationError),
 }
 
-// TODO delete?
 impl Display for ConfigErrorKind {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
@@ -137,13 +151,13 @@ impl LogConfig {
 
 pub struct Config {
     pub authserv_id: Option<String>,
-    pub connection_overrides: Option<Vec<OverrideNetworkEntry>>,
+    pub connection_overrides: Option<ConnectionOverrides>,
     pub delete_incoming_authentication_results: bool,
     pub dry_run: bool,
     pub log_config: LogConfig,
     pub lookup_timeout: Duration,
     pub mode: OpMode,
-    pub recipient_overrides: Option<OverrideEntries>,
+    pub recipient_overrides: Option<RecipientOverrides>,
     pub require_envelope_sender_match: bool,
     pub signing_config: SigningConfig,
     pub signing_senders: SigningSenders,
@@ -169,7 +183,6 @@ impl Config {
 
 impl fmt::Debug for Config {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        // TODO
         f.debug_struct("Config")
             .field("authserv_id", &self.authserv_id)
             .field("connection_overrides", &self.connection_overrides)

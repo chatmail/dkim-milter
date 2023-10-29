@@ -4,10 +4,9 @@
 
 ***in development***
 
-*Status notice: alpha, in development – but feature-complete. All planned
-features for an initial release are available. Lots of
-polishing/renaming/pondering, documenting, testing etc. still to be done,
-feedback welcome.*
+*Status notice: in development, but feature-complete. All planned features for
+an initial release are available. A bit of polishing still to do, feedback
+welcome.*
 
 🏗 🏗 🏗
 
@@ -36,9 +35,13 @@ inspired some choices made here.
 
 ## Installation
 
-SPF Milter is a [Rust] project. It can be built and/or installed using Cargo.
-**Build DKIM Milter from source code with `cargo build` in order to use the
-current development state** (initial development; working, but alpha quality).
+DKIM Milter is a [Rust] project. It can be built and/or installed using Cargo as
+usual. For example, use the following command to install the latest version
+published on [crates.io]:
+
+```
+cargo install --locked dkim-milter
+```
 
 During building and installation the option `--features pre-rfc8301` can be
 specified to revert cryptographic algorithm and key usage back to before [RFC
@@ -46,9 +49,15 @@ specified to revert cryptographic algorithm and key usage back to before [RFC
 use of RSA key sizes below 1024 bits. Use of this feature is strongly
 discouraged.
 
-The minimum supported Rust version is 1.65.0.
+As discussed in the following sections, the default, compiled-in configuration
+file path is `/etc/dkim-milter/dkim-milter.conf`. When building DKIM Milter,
+this default path can be overridden by setting the environment variable
+`DKIM_MILTER_CONFIG_FILE` to the desired path.
+
+The minimum supported Rust version is 1.67.0.
 
 [Rust]: https://www.rust-lang.org
+[crates.io]: https://crates.io/crates/dkim-milter
 [RFC 8301]: https://www.rfc-editor.org/rfc/rfc8301
 
 ## Usage
@@ -74,16 +83,20 @@ result (RFC 8301; but see feature `pre-rfc8301` above).
 
 ## Configuration
 
-The default configuration file is `/etc/dkim-milter/dkim-milter.conf`. **See the
-included example configuration for how to configure the milter, documentation is
-not complete yet.**
-
-The included manual page *dkim-milter.conf*(5) serves as the reference
+The default configuration file is `/etc/dkim-milter/dkim-milter.conf`. The
+included manual page [*dkim-milter.conf*(5)] serves as the reference
 documentation. (You can view the manual page without installing by passing the
 file’s path to `man`: `man ./dkim-milter.conf.5`)
 
+See the included [example configuration] for what a set of configuration files
+might look like.
+
 For a hands-on introduction to getting started with DKIM Milter, please see the
-included TUTORIAL document.
+included [tutorial document].
+
+[*dkim-milter.conf*(5)]: https://gitlab.com/glts/dkim-milter/-/blob/main/dkim-milter.conf.5
+[example configuration]: https://gitlab.com/glts/dkim-milter/-/tree/main/sample-conf
+[tutorial document]: https://gitlab.com/glts/dkim-milter/-/blob/main/TUTORIAL.md
 
 ### Design
 
@@ -278,10 +291,6 @@ dig +short ed25519.2022._domainkey.gluet.ch txt
 (The Ed25519 key record above fits in a single text string. The much larger RSA
 key record is usually spread over several text strings. How such large TXT
 records need to be set up depends on DNS software and/or DNS provider.)
-
-TODO
-For an extended explanation of key generation with the OpenSSL 3 command-line
-utility, see `README-keys.md`.
 
 ## Licence
 

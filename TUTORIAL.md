@@ -1,7 +1,5 @@
 # DKIM Milter tutorial
 
-<!-- TODO compare with OpenDKIM's ./opendkim/README document -->
-
 This tutorial demonstrates step by step how to set up a basic DKIM Milter
 service. It shows how to configure signing and verifying for a simple
 single-domain setup.
@@ -32,7 +30,7 @@ configuration.
 
 The default configuration file belongs at /etc/dkim-milter/dkim-milter.conf.
 Create the directory /etc/dkim-milter and a for now empty file
-/etc/dkim-milter/dkim-milter.conf. Usually, you need to run all such commands as
+/etc/dkim-milter/dkim-milter.conf. Usually, you need to run such commands as
 root.
 
 ```
@@ -43,8 +41,8 @@ touch /etc/dkim-milter/dkim-milter.conf
 ## Generate RSA signing key
 
 DKIM signatures rely on public key cryptography, which is a scheme that uses a
-key with a private and a public component. In order to perform signing later,
-you first need to generate a private key. We will use an RSA key. You can
+key pair with a private and a public component. In order to perform signing
+later, you first need to generate a private key. We will use an RSA key. You can
 generate an RSA signing key using the `openssl` utility from the OpenSSL
 project.
 
@@ -124,9 +122,9 @@ entry, and will then generate and insert a signature with tags `d=example.com`,
 ## Publish RSA public key
 
 Now that we have signing set up, we need to make sure others can verify our
-signatures. With public key cryptography, this requires the public key part to
-be published. We need to publish a DKIM public key record (that is, a TXT
-record) in DNS at `<selector>._domainkey.<domain>`. In our case, at
+signatures. With public key cryptography, this requires the public key to be
+published. We need to publish a DKIM public key record (that is, a TXT record)
+in DNS at `<selector>._domainkey.<domain>`. In our case, at
 `rsa.2023._domainkey.example.com`.
 
 The minimal format of this record is the following, where `<key_data>` is the
