@@ -18,9 +18,9 @@ Before stepping through this tutorial make sure you have the following ready:
 
 ## Install DKIM Milter
 
-First, ensure DKIM Milter is installed. **DKIM Milter has not been released yet,
-you need to build from source using `cargo build`.** Make sure the `dkim-milter`
-program is on the search path and can be executed.
+First, ensure DKIM Milter is installed. The Cargo command `cargo install
+--locked dkim-milter` is the recommended installation method. In any case, make
+sure the `dkim-milter` program is on the search path and can be executed.
 
 The command `dkim-milter -V` should print version information.
 

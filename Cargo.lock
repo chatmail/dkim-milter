@@ -212,7 +212,7 @@ dependencies = [
 
 [[package]]
 name = "dkim-milter"
-version = "0.0.6"
+version = "0.0.7"
 dependencies = [
  "byte-strings",
  "domain",
