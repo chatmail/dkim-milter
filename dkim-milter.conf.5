@@ -495,15 +495,15 @@ If a signature was created with an RSA key of a size below this threshold, the
 signature evaluates to result
 .IR policy ,
 regardless of the cryptographic validity of the signature.
-Note that there is an additional, mandated hard lower limit of 1024 for RSA key
-sizes, smaller sizes always evaluate to result
+Note that there is an additional, mandatory hard lower limit of 1024 bits for
+RSA key sizes, smaller sizes always evaluate to result
 .IR permerror ,
 independent of this setting.
 The default is
 .BR 1024 .
 .IP
 If DKIM Milter was compiled with the legacy compatibility feature “pre-rfc8301”,
-the hard lower limit for RSA key sizes is 512.
+the hard lower limit for RSA key sizes is 512 bits.
 .TP
 .BR reject_failures " (\fIcomma-separated\fR: " missing ", " no-pass ", " author-mismatch )
 The set of signature verification results to reject with an SMTP error reply.
@@ -556,7 +556,7 @@ The default is
 Time tolerance when evaluating timestamp and expiration in signatures, in order
 to allow for clock drift.
 The default is
-.BR 30s .
+.BR 5m .
 .SH FILES
 .I /etc/dkim-milter/dkim-milter.conf
 .SH SEE ALSO

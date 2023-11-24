@@ -13,17 +13,29 @@ welcome.*
 <br>
 <br>
 
-DKIM Milter is a milter application that signs or verifies email messages using
+DKIM Milter is a milter application that signs and verifies email messages using
 the *DomainKeys Identified Mail* (DKIM) protocol. It is meant to be integrated
 with a milter-capable MTA (mail server) such as [Postfix]. DKIM is specified in
 [RFC 6376].
 
 DKIM Milter is based on the [viadkim] library. Therefore, it inherits the
-approach to DKIM used in that library. For example, it fully supports
-internationalised email; it is lenient with regard to encoding problems actually
-occurring in header values such as invalid UTF-8; it does queries for DKIM
-public keys in parallel; it skips unnecessary message body processing; and so
-on.
+approach to DKIM used in that library. Notably, viadkim fully supports
+internationalised email, including Unicode signing domains in the `d=` tag (RFC
+8616). More practically, it inherits the performance characteristics of viadkim
+when processing many, or large, messages, and integrates them with the
+asynchronous-paradigm milter implementation.
+
+DKIM Milter works very efficiently. Public key queries are done in parallel.
+When multiple signatures use the same parameters for calculating the body hash,
+the hash is calculated only once, and the result is shared among the signatures.
+Also, when the body hash does not need to be calculated, such as when the
+signature was already determined to be failing, body processing is skipped
+entirely. A further example is the handling of large messages: DKIM Milter
+processes message bodies in chunks of fixed size, meaning that it does not come
+under pressure even when processing hundreds of messages of 1MB or 10MB each
+concurrently; the *total* memory used for these messages’ bodies at any point in
+time will never exceed a few megabytes or so (ie, a ceiling relative to the
+number of messages, not their size).
 
 DKIM Milter can be used as a simple alternative to the OpenDKIM milter. Credit
 goes to that project, of which I have been a long-time user and which has
@@ -46,8 +58,7 @@ cargo install --locked dkim-milter
 During building and installation the option `--features pre-rfc8301` can be
 specified to revert cryptographic algorithm and key usage back to before [RFC
 8301]: it enables support for the insecure, historic SHA-1 algorithm, and allows
-use of RSA key sizes below 1024 bits. Use of this feature is strongly
-discouraged.
+use of RSA key sizes below 1024 bits. Use of this feature is discouraged.
 
 As discussed in the following sections, the default, compiled-in configuration
 file path is `/etc/dkim-milter/dkim-milter.conf`. When building DKIM Milter,

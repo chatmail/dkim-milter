@@ -346,7 +346,7 @@ impl Default for VerificationConfig {
             reject_failures: Default::default(),
             required_signed_headers:
                 vec![SignedFieldNameWithQualifier::Asterisk(SignedFieldName::new("From").unwrap())],
-            time_tolerance: Duration::from_secs(30),
+            time_tolerance: Duration::from_secs(5 * 60),
         }
     }
 }
