@@ -111,8 +111,8 @@ pub struct Config {
     mock_resolver: Option<MockLookupTxt>,
 }
 
-// important: Config::read is stateful, as it installs a global logger on first use;
-// this logger is active for the rest of the program
+// Note: `Config::read` is stateful, as it installs a global logger on first
+// use; this logger is active for the rest of the program.
 impl Config {
     pub async fn read(opts: CliOptions) -> Result<Self, Box<dyn Error + 'static>> {
         Self::read_internal(opts, None).await
@@ -134,7 +134,7 @@ impl Config {
 
         config.install_static_logger()?;
 
-        // logging now available; from here on, use logging via log macros
+        // Logging now available; from here on, use logging via log macros.
 
         let StubConfig { opts, log_config, config_file_content } = config;
 
@@ -184,13 +184,12 @@ fn configure_logging(config: &LogConfig) -> Result<(), Box<dyn Error + 'static>>
 
     match config.log_destination {
         LogDestination::Syslog => {
-            syslog::init_unix(config.syslog_facility.into(), level)
-                .map_err(|e| {
-                    io::Error::new(
-                        ErrorKind::Other,
-                        format!("could not initialize syslog: {e}"),
-                    )
-                })?;
+            syslog::init_unix(config.syslog_facility.into(), level).map_err(|e| {
+                io::Error::new(
+                    ErrorKind::Other,
+                    format!("could not initialize syslog: {e}"),
+                )
+            })?;
         }
         LogDestination::Stderr => {
             StderrLog::init(level).map_err(|e| {

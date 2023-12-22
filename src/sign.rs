@@ -78,9 +78,7 @@ impl Signer {
                     let c = connection_overrides.merged_with(c);
                     c.merged_with(recipient_overrides)
                 }
-                None => {
-                    connection_overrides.merged_with(recipient_overrides)
-                }
+                None => connection_overrides.merged_with(recipient_overrides),
             };
 
             let signing_config = match config.signing_config.merged_with(&final_overrides) {
@@ -91,7 +89,14 @@ impl Signer {
                 }
             };
 
-            match make_sign_request(&signing_config, &headers, domain.clone(), identity, selector, signing_key) {
+            match make_sign_request(
+                &signing_config,
+                &headers,
+                domain.clone(),
+                identity,
+                selector,
+                signing_key,
+            ) {
                 Ok(request) => {
                     signed_domains.push(domain);
                     requests.push(request);
@@ -170,9 +175,7 @@ fn get_identifiers(domain: DomainExpr, sender: &MailAddr) -> (DomainName, Option
                     (domain, domain2)
                 }
                 IdentityDomainExpr::SenderDomain => (sender.domain.clone(), sender.domain.clone()),
-                IdentityDomainExpr::SplitDomain { d_domain, i_domain } => {
-                    (d_domain, i_domain)
-                }
+                IdentityDomainExpr::SplitDomain { d_domain, i_domain } => (d_domain, i_domain),
             };
 
             let identity = Some(Identity {

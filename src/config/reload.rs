@@ -32,7 +32,6 @@ pub async fn reload(current_session_config: &RwLock<Arc<SessionConfig>>, opts: &
     let mut config = match Config::read(opts).await {
         Ok(config) => config,
         Err(e) => {
-            // TODO revisit single-line format of this error
             error!("failed to reload configuration: {e}");
             return;
         }
@@ -42,8 +41,7 @@ pub async fn reload(current_session_config: &RwLock<Arc<SessionConfig>>, opts: &
     let mut rejected_log_config = None;
 
     let old_config = {
-        let mut locked_config = current_session_config
-            .write()
+        let mut locked_config = current_session_config.write()
             .expect("could not get configuration write lock");
 
         // for params that cannot be reloaded, restore them to original value in

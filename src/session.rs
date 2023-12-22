@@ -50,7 +50,7 @@ enum Mode {
     Verifying(Verifier),
 }
 
-pub enum SenderAddrError {
+enum SenderAddrError {
     Syntax,
     Multiple,
 }
@@ -389,7 +389,8 @@ impl Session {
             from_addresses,
             &connection_overrides.verification_config,
             &recipient_overrides.verification_config,
-        ).await;
+        )
+        .await;
 
         Mode::Verifying(verifier)
     }
@@ -483,7 +484,7 @@ fn eq_authserv_ids(id: &str, aid1: &str, aid2: &str) -> bool {
 // RFC5322, RFC2045, and any other relevant message format standards.’
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-pub enum HeaderValidationError {
+enum HeaderValidationError {
     NoSingleDate,
     NoSingleFrom,
     MultipleSender,
@@ -521,12 +522,10 @@ impl Display for HeaderValidationError {
 
 impl Error for HeaderValidationError {}
 
-// TODO move validation elsewhere
-
 // Validates the given header according to RFC 5322, 3.6. This only validates
 // the cardinality requirements in the table at the end of section 3.6, not the
 // format of the headers.
-pub fn validate_rfc5322(
+fn validate_rfc5322(
     header: impl AsRef<[HeaderField]>,
     sender_address: Option<&Result<AddrSpec, SenderAddrError>>,
     from_addresses: Option<&Result<Vec<AddrSpec>, SenderAddrError>>,
@@ -585,7 +584,8 @@ pub fn validate_rfc5322(
 }
 
 enum Auth {
-    Trusted, Untrusted
+    Trusted,
+    Untrusted,
 }
 
 fn is_trusted_sender(id: &str, config: &Config, ip: Option<IpAddr>, authenticated: bool) -> Auth {
@@ -752,6 +752,7 @@ fn get_connection_overrides(ip: Option<IpAddr>, config: &Config) -> ConfigOverri
             for entry in &connection_overrides.entries {
                 if entry.net.contains(&ip) {
                     result.merge(&entry.config);
+                    break;
                 }
             }
         }
@@ -764,7 +765,7 @@ fn get_recipient_overrides(recipients: &[String], config: &Config) -> ConfigOver
     let mut result = ConfigOverrides::default();
 
     if let Some(recipient_overrides) = &config.recipient_overrides {
-        for recipient in recipients {
+        'rcpts: for recipient in recipients {
             let recipient_ascii_domain = recipient.rsplit_once('@').and_then(|(l, d)| {
                 let domain = DomainName::new(d).ok()?.to_ascii();
                 Some(format!("{l}@{domain}"))
@@ -774,10 +775,12 @@ fn get_recipient_overrides(recipients: &[String], config: &Config) -> ConfigOver
                 if entry.expr.is_match(recipient) {
                     // Does the expr match the recipient string directly?
                     result.merge(&entry.config);
+                    break 'rcpts;
                 } else if let Some(recipient) = &recipient_ascii_domain {
                     // Or does it match the recipient with normalised domain?
                     if entry.expr.is_match(recipient) {
                         result.merge(&entry.config);
+                        break 'rcpts;
                     }
                 }
             }

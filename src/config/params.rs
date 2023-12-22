@@ -269,7 +269,10 @@ fn split_at_comma(value: &str) -> impl DoubleEndedIterator<Item = Result<&str, P
     split_separator(value, ',')
 }
 
-fn split_separator(value: &str, sep: char) -> impl DoubleEndedIterator<Item = Result<&str, ParseParamError>> {
+fn split_separator(
+    value: &str,
+    sep: char,
+) -> impl DoubleEndedIterator<Item = Result<&str, ParseParamError>> {
     let value = value.trim();
 
     let mut values = value.split(sep);
@@ -290,7 +293,10 @@ fn split_separator(value: &str, sep: char) -> impl DoubleEndedIterator<Item = Re
     })
 }
 
-fn split_terminator(value: &str, sep: char) -> impl DoubleEndedIterator<Item = Result<&str, ParseParamError>> {
+fn split_terminator(
+    value: &str,
+    sep: char,
+) -> impl DoubleEndedIterator<Item = Result<&str, ParseParamError>> {
     let value = value.trim();
 
     let mut values = value.split_terminator(sep);

@@ -11,7 +11,7 @@ async fn basic_sign_multi() {
     let mut opts = default_cli_options();
     opts.config_file = Some("tests/sign_multiple/dkim-milter.conf".into());
 
-    let config = read_config(opts).await.unwrap();
+    let config = read_config_with_dummy_lookup(opts).await.unwrap();
 
     let milter = DkimMilter::spawn(config).await.unwrap();
 

@@ -3,7 +3,6 @@ mod common;
 pub use common::*;
 
 use indymilter_test::*;
-use std::io::ErrorKind;
 use log::debug;
 
 #[tokio::test]
@@ -11,11 +10,7 @@ async fn delete_auth_results() {
     let mut opts = default_cli_options();
     opts.config_file = Some("tests/delete_auth_results/dkim-milter.conf".into());
 
-    let config = read_config_with_lookup(opts, |_| {
-        Box::pin(async { Err(ErrorKind::NotFound.into()) })
-    })
-    .await
-    .unwrap();
+    let config = read_config_with_dummy_lookup(opts).await.unwrap();
 
     let milter = DkimMilter::spawn(config).await.unwrap();
 

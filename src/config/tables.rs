@@ -400,7 +400,10 @@ fn parse_domain_expr(s: &str) -> Result<DomainExpr, ParseDomainError> {
             Some(LocalPartExpr::LocalPart(lhs.into()))
         };
 
-        let iexpr = IdentityExpr { local_part, domain_part };
+        let iexpr = IdentityExpr {
+            local_part,
+            domain_part,
+        };
 
         return Ok(DomainExpr::Identity(iexpr));
     }

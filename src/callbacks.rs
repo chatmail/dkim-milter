@@ -20,7 +20,7 @@ use indymilter::{
     Actions, Callbacks, Context, EomContext, MacroStage, Macros, NegotiateContext, ProtoOpts,
     SocketInfo, Status,
 };
-use log::{warn, error};
+use log::{error, warn};
 use std::{
     borrow::Cow,
     ffi::{CStr, CString},
@@ -73,25 +73,23 @@ async fn handle_negotiate(
     supported_actions: Actions,
     supported_opts: ProtoOpts,
 ) -> Status {
-    let session_config = session_config
-        .read()
+    let session_config = session_config.read()
         .expect("could not get configuration read lock")
         .clone();
 
     let config = &session_config.config;
 
-    // Log unsupported required actions and protocol options at error level, the
-    // milter library will abort the connection when this callback returns.
-
     if !config.dry_run {
         if !supported_actions.contains(Actions::ADD_HEADER) {
             error!("MTA does not support adding headers, aborting");
+            return Status::Reject;
         }
         context.requested_actions |= Actions::ADD_HEADER;
 
         if config.delete_incoming_authentication_results {
             if !supported_actions.contains(Actions::CHANGE_HEADER) {
                 error!("MTA does not support altering headers, aborting");
+                return Status::Reject;
             }
             context.requested_actions |= Actions::CHANGE_HEADER;
         }
@@ -99,6 +97,7 @@ async fn handle_negotiate(
 
     if !supported_opts.contains(ProtoOpts::LEADING_SPACE) {
         error!("MTA does not support accurate whitespace handling in headers, aborting");
+        return Status::Reject;
     }
     context.requested_opts |= ProtoOpts::LEADING_SPACE;
 
@@ -106,7 +105,7 @@ async fn handle_negotiate(
     if can_skip {
         context.requested_opts |= ProtoOpts::SKIP;
     } else {
-        // Only `warn!` here, we can proceed just fine without Skip.
+        // Only `warn!` here, we can proceed just fine without `Skip`.
         warn!("MTA does not support skipping repeated callback calls");
     }
 
@@ -128,9 +127,7 @@ async fn handle_connect(context: &mut Context<Session>, socket_info: SocketInfo)
         _ => None,
     };
 
-    let hostname = context
-        .macros
-        .get_string(c_str!("j"))
+    let hostname = context.macros.get_string(c_str!("j"))
         .map_or_else(|| "unknown".into(), |h| h.into_owned());
 
     session.init_connection(ip, hostname);
@@ -147,7 +144,7 @@ async fn handle_mail(context: &mut Context<Session>, smtp_args: Vec<CString>) ->
 
     session.set_envelope_sender(mail_from.into());
 
-    if let Some(_login) = context.macros.get_string(c_str!("{auth_type}")) {
+    if context.macros.get_string(c_str!("{auth_type}")).is_some() {
         session.set_authenticated();
     }
 

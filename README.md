@@ -1,18 +1,5 @@
 # DKIM Milter
 
-🚧 🚧 🚧
-
-***in development***
-
-*Status notice: in development, but feature-complete. All planned features for
-an initial release are available. A bit of polishing still to do, feedback
-welcome.*
-
-🏗 🏗 🏗
-
-<br>
-<br>
-
 DKIM Milter is a milter application that signs and verifies email messages using
 the *DomainKeys Identified Mail* (DKIM) protocol. It is meant to be integrated
 with a milter-capable MTA (mail server) such as [Postfix]. DKIM is specified in
@@ -25,17 +12,17 @@ internationalised email, including Unicode signing domains in the `d=` tag (RFC
 when processing many, or large, messages, and integrates them with the
 asynchronous-paradigm milter implementation.
 
-DKIM Milter works very efficiently. Public key queries are done in parallel.
+DKIM Milter tries to work efficiently. Public key queries are done in parallel.
 When multiple signatures use the same parameters for calculating the body hash,
 the hash is calculated only once, and the result is shared among the signatures.
 Also, when the body hash does not need to be calculated, such as when the
 signature was already determined to be failing, body processing is skipped
 entirely. A further example is the handling of large messages: DKIM Milter
 processes message bodies in chunks of fixed size, meaning that it does not come
-under pressure even when processing hundreds of messages of 1MB or 10MB each
-concurrently; the *total* memory used for these messages’ bodies at any point in
-time will never exceed a few megabytes or so (ie, a ceiling relative to the
-number of messages, not their size).
+under pressure even when processing hundreds of messages of one or two megabytes
+each concurrently; the *total* memory used for these messages’ bodies at any
+point in time will never exceed a few megabytes or so (ie, a ceiling relative to
+the number of messages, not their size).
 
 DKIM Milter can be used as a simple alternative to the OpenDKIM milter. Credit
 goes to that project, of which I have been a long-time user and which has
@@ -84,7 +71,7 @@ signal to the process or press Control-C to shut the milter down. While the
 milter is running, send signal SIGHUP to reload the configuration.
 
 DKIM Milter is usually set up as a system service. Use the provided systemd
-service as a starting point. See the included TUTORIAL document for how to
+service as a starting point. See the included tutorial document for how to
 create the system service.
 
 The supported signature algorithms, for both signing and verifying, are
@@ -102,7 +89,7 @@ file’s path to `man`: `man ./dkim-milter.conf.5`)
 See the included [example configuration] for what a set of configuration files
 might look like.
 
-For a hands-on introduction to getting started with DKIM Milter, please see the
+For a hands-on introduction to getting started with DKIM Milter, see the
 included [tutorial document].
 
 [*dkim-milter.conf*(5)]: https://gitlab.com/glts/dkim-milter/-/blob/main/dkim-milter.conf.5
@@ -242,9 +229,9 @@ example.com           .@example.com
 
 ## Key setup
 
-Currently no utilities are provided for key management. However, the `openssl`
-utility from OpenSSL 3 can do everything for us. The following tutorial uses
-exclusively that tool to do all key setup.
+Currently no utilities are provided for key management. However, we can use the
+`openssl` utility from OpenSSL 3 to provide keys manually. The following
+tutorial uses exclusively that tool to do all key setup.
 
 For signing, DKIM Milter reads signing keys (private keys) from files in PKCS#8
 PEM format. This format can be recognised by its beginning line

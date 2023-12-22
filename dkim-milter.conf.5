@@ -7,9 +7,9 @@ dkim-milter.conf \- DKIM Milter configuration file
 .I dkim-milter.conf
 is the configuration file for DKIM Milter.
 .BR dkim-milter (8)
-is a milter application that signs and verifies messages using
+is a milter application that signs and verifies messages using the
 .I DomainKeys Identified Mail
-signatures (RFC\~6376).
+protocol (RFC\~6376).
 .PP
 DKIM Milter accepts incoming connections from the MTA, and then handles each
 message transaction in either signing mode or verifying mode.
@@ -122,9 +122,8 @@ The table should list, in whitespace-separated columns, (1) a network address,
 (2) the path to a configuration file, prefixed with “<”, containing signing and
 verification parameters.
 .IP
-When processing a message, if one or more entries match the connecting IP
-address, their associated configuration parameters override the main
-configuration settings.
+When processing a message, if an entry matches the connecting IP address, its
+associated configuration parameters override the main configuration settings.
 .TP
 .BR delete_incoming_authentication_results " (\fIboolean\fR)"
 Whether to delete incoming
@@ -206,10 +205,10 @@ expression (the same format as a sender expression, see below), (2) the path to
 a configuration file, prefixed with “<”, containing signing and verification
 parameters.
 .IP
-When processing a message, if one or more entries match one or more envelope
-recipient addresses (SMTP command
+When processing a message, if an entry matches an envelope recipient addresses
+(SMTP command
 .IR "RCPT TO" ),
-their associated configuration parameters override the main configuration
+its associated configuration parameters override the main configuration
 settings.
 .TP
 .BR require_envelope_sender_match " (\fIboolean\fR)"
@@ -363,8 +362,8 @@ This set is used for value
 .B default
 in parameter
 .BR sign_headers .
-The default is currently not documented, but follows recommendations in
-RFC\~6376, section 5.4.1.
+The default is not documented, but follows recommendations in RFC\~6376, section
+5.4.1.
 .TP
 .BR default_unsigned_headers " (\fIcolon-separated\fR)"
 The default set of headers to exclude from being signed.
@@ -372,8 +371,8 @@ This set is used for value
 .B all
 in parameter
 .BR sign_headers .
-The default is currently not documented, but follows recommendations in
-RFC\~6376, section 5.4.1.
+The default is not documented, but follows recommendations in RFC\~6376, section
+5.4.1.
 .TP
 .BR expiration " (\fIduration\fR | " never )
 The validity period to declare in the
@@ -457,7 +456,7 @@ The default is
 .BR no .
 .TP
 .BR allow_sha1 " (\fIboolean\fR)"
-Whether to evaluate signatures using the SHA-1 hash algorithm.
+Whether to evaluate signatures using the SHA-1 hash algorithm as passing.
 If this setting is disabled, signatures using the SHA-1 hash algorithm always
 evaluate to result
 .IR policy ,
@@ -533,6 +532,8 @@ example, through an entry in
 .TP
 .BR required_signed_headers " (\fIcolon-separated\fR)"
 The set of headers required to be included in a signature.
+A signature with missing headers evaluates to result
+.IR policy .
 A bare header name requires that header to be included in a signature’s
 .I h=
 tag at least once.

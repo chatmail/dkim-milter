@@ -2,7 +2,7 @@ use dkim_milter::{CliOptions, Config, LogDestination, LogLevel, LookupFuture, So
 use std::{
     env,
     error::Error,
-    io,
+    io::{self, ErrorKind},
     net::{Ipv4Addr, SocketAddr},
     sync::Once,
     time::Duration,
@@ -59,6 +59,13 @@ pub async fn read_config_with_lookup(
     let config = config.read_fully_with_lookup(lookup).await?;
 
     Ok(config)
+}
+
+pub async fn read_config_with_dummy_lookup(opts: CliOptions) -> Result<Config, Box<dyn Error>> {
+    read_config_with_lookup(opts, |_| {
+        Box::pin(async { Err(ErrorKind::NotFound.into()) })
+    })
+    .await
 }
 
 pub struct DkimMilter {

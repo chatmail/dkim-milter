@@ -344,8 +344,9 @@ impl Default for VerificationConfig {
             max_signatures_to_verify: 10,
             min_rsa_key_bits: 1024,
             reject_failures: Default::default(),
-            required_signed_headers:
-                vec![SignedFieldNameWithQualifier::Asterisk(SignedFieldName::new("From").unwrap())],
+            required_signed_headers: vec![SignedFieldNameWithQualifier::Asterisk(
+                SignedFieldName::new("From").unwrap(),
+            )],
             time_tolerance: Duration::from_secs(5 * 60),
         }
     }
@@ -767,7 +768,6 @@ pub enum RejectFailure {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct RejectFailures(pub HashSet<RejectFailure>);
 
-// TODO
 #[derive(Clone, Debug, Default)]
 pub struct SigningSenders {
     pub entries: Vec<SigningSender>,
@@ -785,7 +785,7 @@ pub struct SigningSender {
 #[derive(Clone, Debug)]
 pub enum DomainExpr {
     Domain(DomainName),
-    SenderDomain,  // .
+    SenderDomain,
     Identity(IdentityExpr),
 }
 
@@ -798,13 +798,13 @@ pub struct IdentityExpr {
 #[derive(Clone, Debug)]
 pub enum LocalPartExpr {
     LocalPart(String),
-    SenderLocalPart,  // .
+    SenderLocalPart,
 }
 
 #[derive(Clone, Debug)]
 pub enum IdentityDomainExpr {
     Domain(DomainName),
-    SenderDomain,  // .
+    SenderDomain,
     SplitDomain {
         d_domain: DomainName,
         i_domain: DomainName,

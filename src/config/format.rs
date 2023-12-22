@@ -173,7 +173,6 @@ impl Error for ParseParamError {}
 
 impl Display for ParseParamError {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        // TODO move?
         match self {
             Self::InvalidLine => write!(f, "invalid line syntax"),
             Self::UnknownKey(key) => write!(f, "unknown parameter \"{key}\""),
@@ -298,9 +297,7 @@ async fn parse_log_config(
     })
 }
 
-async fn parse_partial_log_config(
-    file_content: &str,
-) -> Result<PartialLogConfig, ConfigErrorKind> {
+async fn parse_partial_log_config(file_content: &str) -> Result<PartialLogConfig, ConfigErrorKind> {
     let mut config = PartialLogConfig::default();
 
     let mut keys_seen = HashSet::new();
@@ -326,9 +323,7 @@ async fn parse_partial_log_config(
     Ok(config)
 }
 
-pub async fn read_config_overrides(
-    file_name: &str,
-) -> Result<ConfigOverrides, ConfigError> {
+pub async fn read_config_overrides(file_name: &str) -> Result<ConfigOverrides, ConfigError> {
     async {
         let file_content = fs::read_to_string(file_name).await?;
 
@@ -343,9 +338,7 @@ pub async fn read_config_overrides(
     })
 }
 
-async fn parse_config_overrides(
-    file_content: &str,
-) -> Result<ConfigOverrides, ParseConfigError> {
+async fn parse_config_overrides(file_content: &str) -> Result<ConfigOverrides, ParseConfigError> {
     let mut signing_config = PartialSigningConfig::default();
     let mut verification_config = PartialVerificationConfig::default();
 
@@ -534,7 +527,7 @@ async fn parse_raw_config(file_content: &str) -> Result<RawConfig, ConfigErrorKi
     Ok(config)
 }
 
-async fn build_config(
+pub async fn build_config(
     opts: &CliOptions,
     final_log_config: Option<LogConfig>,
     raw_config: RawConfig,
@@ -561,7 +554,10 @@ async fn build_config(
 
     let mode = raw_config.mode.unwrap_or_default();
 
-    let signing_senders = match (raw_config.signing_keys_file, raw_config.signing_senders_file) {
+    let signing_senders = match (
+        raw_config.signing_keys_file,
+        raw_config.signing_senders_file,
+    ) {
         (Some(signing_keys_file), Some(signing_senders_file)) => {
             let wants_sign = matches!(mode, OpMode::Sign | OpMode::Auto);
             read_signing_config(wants_sign, &signing_keys_file, &signing_senders_file).await?
@@ -674,30 +670,28 @@ async fn read_signing_config(
     }
 
     for name in key_names {
-        warn!("unused signing key \"{}\" found in signing keys", name);
+        warn!("unused signing key \"{name}\" found in signing keys");
     }
 
     if signing_senders.is_empty() && wants_sign {
         warn!("no signing senders available, no signing will be done");
     }
 
-    let key_store: HashMap<_, _> = signing_keys.into_iter().map(|(k, v)| {
-        (k, Arc::new(v))
-    }).collect();
+    let key_store: HashMap<_, _> = signing_keys.into_iter()
+        .map(|(k, v)| (k, Arc::new(v)))
+        .collect();
 
-    let entries: Vec<_> = signing_senders.into_iter().map(|entry| {
-        SigningSender {
+    let entries: Vec<_> = signing_senders.into_iter()
+        .map(|entry| SigningSender {
             sender_expr: entry.sender_expr,
             domain: entry.domain_expr,
             selector: entry.selector,
             key: Arc::clone(key_store.get(&entry.key_name).unwrap()),
             signing_config: entry.signing_config,
-        }
-    }).collect();
+        })
+        .collect();
 
-    let signing_senders = SigningSenders {
-        entries,
-    };
+    let signing_senders = SigningSenders { entries };
 
     Ok(signing_senders)
 }

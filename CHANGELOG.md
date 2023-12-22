@@ -9,4 +9,4 @@ minimum supported Rust version being considered breaking changes.
 
 ## 0.1.0 (unreleased)
 
-(In development.)
+Initial release.

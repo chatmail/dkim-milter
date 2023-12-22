@@ -26,7 +26,7 @@ use viadkim::signature::DomainName;
 
 // Note: Some things copied from SPF Milter, may consolidate later.
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct MailAddr {
     pub local_part: String,
     pub domain: DomainName,
@@ -38,7 +38,7 @@ impl Display for MailAddr {
     }
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Eq, PartialEq)]
 pub struct ParseAddrSpecError;
 
 impl Error for ParseAddrSpecError {}
@@ -82,9 +82,10 @@ pub struct AddrSpec {
 impl AddrSpec {
     pub fn into_mail_addr(self) -> Option<MailAddr> {
         match self {
-            Self { local_part, domain_part: DomainPart::DomainName(domain) } => {
-                Some(MailAddr { local_part, domain })
-            }
+            Self {
+                local_part,
+                domain_part: DomainPart::DomainName(domain),
+            } => Some(MailAddr { local_part, domain }),
             _ => None,
         }
     }
@@ -211,8 +212,7 @@ fn parse_angle_addr(input: &str) -> Option<(AddrSpec, &str)> {
 // domain = dot-atom / domain-literal
 // (Surrounding [CFWS] has been stripped already.)
 fn parse_addr_spec(input: &str) -> Option<(AddrSpec, &str)> {
-    let rest = strip_dot_atom(input)
-        .or_else(|| strip_quoted_string(input))?;
+    let rest = strip_dot_atom(input).or_else(|| strip_quoted_string(input))?;
     let local_part = strip_suffix(input, rest);
 
     let s = strip_cfws(rest).unwrap_or(rest);

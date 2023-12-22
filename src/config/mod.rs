@@ -42,7 +42,7 @@ use std::{
     time::Duration,
 };
 
-pub const DEFAULT_CONFIG_FILE: &str = match option_env!("DKIM_MILTER_CONFIG_FILE") {
+const DEFAULT_CONFIG_FILE: &str = match option_env!("DKIM_MILTER_CONFIG_FILE") {
     Some(s) => s,
     None => "/etc/dkim-milter/dkim-milter.conf",
 };

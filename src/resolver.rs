@@ -32,15 +32,16 @@ use std::{
 };
 use viadkim::verifier::LookupTxt;
 
-pub type LookupFuture = Pin<Box<dyn Future<Output = io::Result<Vec<io::Result<Vec<u8>>>>> + Send>>;
+pub type LookupFuture<'a> =
+    Pin<Box<dyn Future<Output = io::Result<Vec<io::Result<Vec<u8>>>>> + Send + 'a>>;
 
 #[derive(Clone)]
 pub struct MockLookupTxt {
-    mock_resolver: Arc<dyn Fn(&str) -> LookupFuture + Send + Sync>,
+    mock_resolver: Arc<dyn Fn(&str) -> LookupFuture<'_> + Send + Sync>,
 }
 
 impl MockLookupTxt {
-    pub fn new(mock_resolver: Arc<dyn Fn(&str) -> LookupFuture + Send + Sync>) -> Self {
+    pub fn new(mock_resolver: Arc<dyn Fn(&str) -> LookupFuture<'_> + Send + Sync>) -> Self {
         Self { mock_resolver }
     }
 }

@@ -27,7 +27,7 @@ use viadkim::{
     verifier::{DkimResult, VerificationError, VerificationResult, VerificationStatus},
 };
 
-// Note: Some things initially copied from SPF Milter, may consolidate later.
+// Note: Some things were initially copied from SPF Milter.
 
 pub fn extract_authserv_id(value: &[u8]) -> Option<Cow<'_, str>> {
     // *authserv-id* is a lexical token of kind `value` as defined in RFC 2045,

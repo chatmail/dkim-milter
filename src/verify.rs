@@ -137,7 +137,6 @@ impl Verifier {
         // log all sigs, and determine status for potential rejection
 
         for sig in &sigs {
-            // first, update sig status
             let is_testing = matches!(&sig.key_record, Some(r) if r.is_testing());
 
             // DKIM key records in testing mode are treated as passing!
@@ -175,8 +174,6 @@ impl Verifier {
                 }
                 SigStatus::PassingFrom => {}
             }
-
-            // now log
 
             let testing = "test mode";
 
@@ -335,7 +332,6 @@ fn make_b_string(r: &VerificationResult) -> Option<String> {
     None
 }
 
-// TODO revisit: actually might want to strip CRLF for all header.* tags
 // If the b tag string content consists of what looks like (perhaps only
 // incomplete) Base64, then strip whitespace as would usually happen.
 fn sanitize_b_tag_value(s: &str) -> Option<String> {
@@ -530,19 +526,22 @@ mod tests {
 
         let result = compute_signature_prefixes_internal(&sigs, 4);
 
-        assert_eq!(result, [
-            Some("𝔞b𝔠".into()),
-            None,
-            Some("𝔞b𝔠d".into()),
-            Some("p𝔮r𝔰t𝔲".into()),
-            Some("p𝔮r𝔰T".into()),
-            Some("p𝔮r𝔰t𝔵".into()),
-            Some("p𝔮r𝔰t𝔲v".into()),
-            Some("p𝔮r𝔰".into()),
-            Some("9876".into()),
-            Some("9876".into()),
-            Some("123456".into()),
-            Some("1234".into()),
-        ]);
+        assert_eq!(
+            result,
+            [
+                Some("𝔞b𝔠".into()),
+                None,
+                Some("𝔞b𝔠d".into()),
+                Some("p𝔮r𝔰t𝔲".into()),
+                Some("p𝔮r𝔰T".into()),
+                Some("p𝔮r𝔰t𝔵".into()),
+                Some("p𝔮r𝔰t𝔲v".into()),
+                Some("p𝔮r𝔰".into()),
+                Some("9876".into()),
+                Some("9876".into()),
+                Some("123456".into()),
+                Some("1234".into()),
+            ]
+        );
     }
 }
