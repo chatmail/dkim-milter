@@ -290,9 +290,14 @@ dig +short ed25519.2022._domainkey.gluet.ch txt
 key record is usually spread over several text strings. How such large TXT
 records need to be set up depends on DNS software and/or DNS provider.)
 
+Alternatively, it is planned that the command-line tool [dkimdo] will provide
+functionality for conveniently generating the above key material.
+
+[dkimdo]: https://crates.io/crates/dkimdo
+
 ## Licence
 
-Copyright © 2022–2023 David Bürgin
+Copyright © 2022–2024 David Bürgin
 
 This program is free software: you can redistribute it and/or modify it under
 the terms of the GNU General Public License as published by the Free Software
