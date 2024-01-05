@@ -12,8 +12,8 @@ exclude = ["/.gitignore", "/.gitlab-ci.yml"]
 
 [dependencies]
 byte-strings = "0.3.1"
-domain = { version = "0.9.2", features = ["resolv"] }
-futures = "0.3.29"
+domain = { version = "0.9.3", features = ["resolv"] }
+futures-util = "0.3.29"
 idna = "0.4.0"
 indymilter = "0.2.0"
 ipnet = "2.9.0"

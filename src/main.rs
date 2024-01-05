@@ -15,7 +15,7 @@
 // this program. If not, see <https://www.gnu.org/licenses/>.
 
 use dkim_milter::{CliOptions, Config, Socket, MILTER_NAME, VERSION};
-use futures::stream::StreamExt;
+use futures_util::stream::StreamExt;
 use indymilter::Listener;
 use log::error;
 use signal_hook::consts::{SIGHUP, SIGINT, SIGTERM};

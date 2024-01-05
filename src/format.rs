@@ -108,6 +108,8 @@ pub enum DomainPart {
 // complicated, revisit?
 
 // RFC 5322, section 3.4
+// (But note the update in RFC 6854, which is not useful in our application, and
+// therefore ignored.)
 
 // mailbox-list = (mailbox *("," mailbox))
 fn parse_mailboxes(input: &[u8]) -> Option<(Vec<AddrSpec>, &[u8])> {
