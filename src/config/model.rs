@@ -15,7 +15,6 @@
 // this program. If not, see <https://www.gnu.org/licenses/>.
 
 use ipnet::IpNet;
-use regex::Regex;
 use std::{
     collections::HashSet,
     error::Error,
@@ -27,9 +26,9 @@ use std::{
 };
 use syslog::Facility;
 use viadkim::{
-    crypto::{HashAlgorithm, SigningKey},
+    crypto::HashAlgorithm,
     header::{FieldName, HeaderFieldError},
-    signature::{Canonicalization, CanonicalizationAlgorithm, DomainName, Selector},
+    signature::{Canonicalization, CanonicalizationAlgorithm, DomainName},
     signer,
 };
 
@@ -768,20 +767,6 @@ pub enum RejectFailure {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct RejectFailures(pub HashSet<RejectFailure>);
 
-#[derive(Clone, Debug, Default)]
-pub struct SigningSenders {
-    pub entries: Vec<SigningSender>,
-}
-
-#[derive(Clone, Debug)]
-pub struct SigningSender {
-    pub sender_expr: Regex,
-    pub domain: DomainExpr,
-    pub selector: Selector,
-    pub key: Arc<SigningKey>,
-    pub signing_config: Option<PartialSigningConfig>,
-}
-
 #[derive(Clone, Debug)]
 pub enum DomainExpr {
     Domain(DomainName),
@@ -809,28 +794,6 @@ pub enum IdentityDomainExpr {
         d_domain: DomainName,
         i_domain: DomainName,
     },
-}
-
-#[derive(Clone, Debug, Default)]
-pub struct ConnectionOverrides {
-    pub entries: Vec<NetworkOverride>,
-}
-
-#[derive(Clone, Debug)]
-pub struct NetworkOverride {
-    pub net: IpNet,
-    pub config: ConfigOverrides,
-}
-
-#[derive(Clone, Debug, Default)]
-pub struct RecipientOverrides {
-    pub entries: Vec<MailAddrOverride>,
-}
-
-#[derive(Clone, Debug)]
-pub struct MailAddrOverride {
-    pub expr: Regex,
-    pub config: ConfigOverrides,
 }
 
 #[cfg(test)]

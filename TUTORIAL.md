@@ -78,8 +78,8 @@ how. This is done through the two parameters `signing_keys` and
 `signing_senders`. Add the following to /etc/dkim-milter/dkim-milter.conf:
 
 ```
-signing_keys = /etc/dkim-milter/signing-keys
-signing_senders = /etc/dkim-milter/signing-senders
+signing_keys = </etc/dkim-milter/signing-keys
+signing_senders = </etc/dkim-milter/signing-senders
 ```
 
 /etc/dkim-milter/signing-keys should list the named keys that we want to use for
@@ -282,8 +282,8 @@ The final configuration /etc/dkim-milter/dkim-milter.conf:
 
 ```
 socket = inet:localhost:3000
-signing_keys = /etc/dkim-milter/signing-keys
-signing_senders = /etc/dkim-milter/signing-senders
+signing_keys = </etc/dkim-milter/signing-keys
+signing_senders = </etc/dkim-milter/signing-senders
 # and optionally:
 delete_incoming_authentication_results = no
 ```

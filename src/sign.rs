@@ -22,8 +22,8 @@ use crate::{
         },
         Config,
     },
+    datastore::SenderMatch,
     format::MailAddr,
-    session::SenderMatch,
 };
 use indymilter::{ActionError, ContextActions, Status};
 use log::{error, info, warn};
@@ -52,7 +52,7 @@ impl Signer {
         matches: Vec<SenderMatch>,
         connection_overrides: &PartialSigningConfig,
         recipient_overrides: &PartialSigningConfig,
-    ) -> Result<Self, Box<dyn Error>> {
+    ) -> Result<Self, Box<dyn Error + Send + Sync>> {
         assert!(!matches.is_empty());
 
         // step through matches and create SignRequest for each match
@@ -108,7 +108,7 @@ impl Signer {
         }
 
         let signer = viadkim::Signer::prepare_signing(headers, requests)
-            .map_err(|_| "could not prepare signing")?;
+            .map_err(|e| format!("could not prepare signing process: {e}"))?;
 
         Ok(Self {
             delegate: signer,

@@ -22,6 +22,7 @@ once_cell = "1.18.0"
 regex = "1.10.2"
 signal-hook = "0.3.17"
 signal-hook-tokio = { version = "0.3.1", features = ["futures-v0_3"] }
+sqlx = { version = "0.7.3", features = ["runtime-tokio"], optional = true }
 syslog = "6.1.0"
 tokio = { version = "1.34.0", features = ["fs", "macros", "net", "rt", "rt-multi-thread", "sync"] }
 viadkim = "0.1.0"
@@ -32,3 +33,5 @@ indymilter-test = { version = "0.1.0", features = ["regex"] }
 [features]
 # Reverts cryptographic algorithm and key usage to before RFC 8301.
 pre-rfc8301 = ["viadkim/pre-rfc8301"]
+# Makes available the SQLite data source.
+sqlite = ["dep:sqlx", "sqlx/sqlite"]

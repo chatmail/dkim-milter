@@ -20,7 +20,7 @@ signature was already determined to be failing, body processing is skipped
 entirely. A further example is the handling of large messages: DKIM Milter
 processes message bodies in chunks of fixed size, meaning that it does not come
 under pressure even when processing hundreds of messages of one or two megabytes
-each concurrently; the *total* memory used for these messages’ bodies at any
+each simultaneously; the *total* memory used for these messages’ bodies at any
 point in time will never exceed a few megabytes or so (ie, a ceiling relative to
 the number of messages, not their size).
 
@@ -98,16 +98,17 @@ included [tutorial document].
 
 ### Design
 
-The configuration is currently entirely file-based. In the future, other data
-sources such as an SQL database may be added.
+DKIM Milter configuration consists of the main configuration file
+`dkim-milter.conf`, plus supplementary files or data sources providing
+additional table-like configuration.
 
-The configuration consists at the minimum of the main configuration file
-`dkim-milter.conf`. The main configuration file contains global settings.
+The main configuration file contains global settings. For signing, configuration
+is read from the specified data sources.
 
-The global settings can be overridden for selected inputs through *overrides* in
-table-like *override files*. Overrides can be applied to connecting network
-addresses, recipients (given in the `RCPT TO:` SMTP command), and to senders (in
-the *Sender* or *From* headers).
+Global settings can be overridden for selected inputs through *overrides*
+specified in further data sources. Overrides can be applied to connecting
+network addresses, recipients (given in the `RCPT TO:` SMTP command), and to
+senders (in the *Sender* or *From* headers).
 
 For example, the `recipient_overrides` parameter can be used to specify
 configuration overrides for certain message recipients. This allows, for
@@ -140,8 +141,8 @@ contains multiple mailboxes, *Sender* must be included according to RFC 5322,
 and thus the originator will then be taken from *Sender*.)
 
 *Signing senders* are senders (domains or email addresses) for which a signing
-key and signing configuration have been set up. They are configured in the table
-referenced by parameter `signing_senders`.
+key and signing configuration have been set up. They are configured in the data
+source referenced by parameter `signing_senders`.
 
 The operating mode (sign-only, verify-only, or automatic per the above
 procedure) can also be configured with the `mode` parameter.
@@ -149,11 +150,12 @@ procedure) can also be configured with the `mode` parameter.
 ### Signing senders
 
 Signing configuration is set up through two configuration parameters pointing to
-table-like files. These parameters are `signing_senders` and `signing_keys`.
+table-like files (or other data sources, see the following section). These
+parameters are `signing_senders` and `signing_keys`:
 
 ```
-signing_senders = /path/to/signing_senders_file
-signing_keys = /path/to/signing_keys_file
+signing_senders = </path/to/signing_senders_file
+signing_keys = </path/to/signing_keys_file
 ```
 
 The main idea for configuring signing is the *signing senders* table (parameter
@@ -183,9 +185,9 @@ key1         </path/to/signing_key1_pem_file
 key2         </path/to/signing_key2_pem_file
 ```
 
-The key source must currently always be a file path prefixed with `<`, pointing
-to a PKCS#8 PEM file. The signing key type (RSA or Ed25519) is detected
-automatically.
+The key source must be a filesystem data source (ie, a path prefixed with `<` or
+`file:`) pointing to a PKCS#8 PEM file. The signing key type (RSA or Ed25519)
+is detected automatically.
 
 Additional per-signature (ie, per sender expression match) configuration
 overrides can be specified in the optional fifth column in the `signing_senders`
@@ -226,6 +228,66 @@ example.com           user@example.com
 example.com           .@example.com
 # => d=example.com, i=user@example.com
 ```
+
+### Data sources
+
+Above, several table-like files were introduced. Those are in fact part of a
+more general idea of *data sources*. Some configuration parameters reference
+tabular data – a list or set of entries – that will be supplied by a specific
+data storage.
+
+Currently three data sources are available: `<` or `slurp:`, reads data from the
+filesystem once and then keeps it in memory; `file:`, re-reads data from the
+filesystem every time it is needed; (if enabled) `sqlite:`, reads data from an
+SQLite database.
+
+The **in-memory filesystem data source** is represented as a file path prefixed
+with `<` or `slurp:`.
+
+Example:
+
+```
+signing_keys = </path/to/signing-keys
+```
+
+When this data source is used, the data is read and validated eagerly at startup
+and then kept unchanged in memory until termination (or until reloaded). Lookups
+are in-memory, the filesystem is not accessed during operation.
+
+The **live filesystem data source** is represented as a file path prefixed with
+`file:`.
+
+Example:
+
+```
+signing_keys = file:/path/to/signing-keys
+```
+
+With this data source, the data is only read when needed, and not kept in
+memory. Changes to the files become active immediately, without needing
+reloading or a restart.
+
+What are some uses of the filesystem data sources? You could use `<`
+exclusively. The entire configuration will be read eagerly at startup and will
+then only exist in memory. If instead you use `file:` everywhere, configuration
+is read on demand, ie the filesystem is treated as a database, with changes
+being applied automatically and immediately. A further option is to use `<`
+throughout, but use `file:` for the signing key files themselves: then all
+configuration is kept in memory, but the (sensitive) key material is read into
+memory only temporarily for signing and discarded after use.
+
+The **SQLite data source** is represented as an SQLite database URI with prefix
+`sqlite:`. This data source is only available with option `--features sqlite` at
+build/install time. The table name can be customised by appending `#` followed
+by the table name, if needed.
+
+Example:
+
+```
+signing_keys = sqlite://mail-config.db#milter_signing_keys
+```
+
+The database schema is documented elsewhere in this project.
 
 ## Key setup
 

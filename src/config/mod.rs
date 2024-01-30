@@ -18,7 +18,6 @@ pub mod format;
 pub mod model;
 pub mod params;
 pub mod reload;
-pub mod tables;
 
 pub use reload::reload;
 
@@ -26,16 +25,17 @@ use crate::{
     config::{
         format::{ParseConfigError, ValidationError},
         model::{
-            ConnectionOverrides, LogDestination, LogLevel, OpMode, RecipientOverrides,
-            SigningConfig, SigningSenders, Socket, SyslogFacility, TrustedNetworks,
-            VerificationConfig,
+            LogDestination, LogLevel, OpMode, SigningConfig, Socket, SyslogFacility,
+            TrustedNetworks, VerificationConfig,
         },
     },
+    datastore::{ConnectionOverridesDb, RecipientOverridesDb, SigningKeysDb, SigningSendersDb},
     resolver::{DomainResolver, MockLookupTxt, Resolver},
 };
+use log::error;
 use std::{
     error::Error,
-    fmt::{self, Display, Formatter},
+    fmt::{self, Display, Formatter, Write},
     io,
     path::{Path, PathBuf},
     sync::Arc,
@@ -135,6 +135,21 @@ impl From<ValidationError> for ConfigErrorKind {
     }
 }
 
+pub fn log_errors(id: Option<&str>, error: &(dyn Error + Send + Sync + 'static)) {
+    let mut error: &(dyn Error + 'static) = error;
+
+    let mut msg = format!("{error}");
+    while let Some(next) = error.source() {
+        error = next;
+        write!(msg, ": {error}").unwrap();
+    }
+
+    match id {
+        Some(id) => error!("{id}: {msg}"),
+        None => error!("{msg}"),
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct LogConfig {
     pub log_destination: LogDestination,
@@ -149,18 +164,20 @@ impl LogConfig {
     }
 }
 
+#[derive(Debug)]
 pub struct Config {
     pub authserv_id: Option<String>,
-    pub connection_overrides: Option<ConnectionOverrides>,
+    pub connection_overrides: Option<Box<dyn ConnectionOverridesDb>>,
     pub delete_incoming_authentication_results: bool,
     pub dry_run: bool,
     pub log_config: LogConfig,
     pub lookup_timeout: Duration,
     pub mode: OpMode,
-    pub recipient_overrides: Option<RecipientOverrides>,
+    pub recipient_overrides: Option<Box<dyn RecipientOverridesDb>>,
     pub require_envelope_sender_match: bool,
     pub signing_config: SigningConfig,
-    pub signing_senders: SigningSenders,
+    pub signing_keys: Option<Box<dyn SigningKeysDb>>,
+    pub signing_senders: Option<Box<dyn SigningSendersDb>>,
     pub socket: Socket,
     pub trust_authenticated_senders: bool,
     pub trusted_networks: TrustedNetworks,
@@ -178,27 +195,5 @@ impl Config {
 
     pub async fn read(opts: &CliOptions) -> Result<Self, ConfigError> {
         format::read_config(opts).await
-    }
-}
-
-impl fmt::Debug for Config {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Config")
-            .field("authserv_id", &self.authserv_id)
-            .field("connection_overrides", &self.connection_overrides)
-            .field("delete_incoming_authentication_results", &self.delete_incoming_authentication_results)
-            .field("dry_run", &self.dry_run)
-            .field("log_config", &self.log_config)
-            .field("lookup_timeout", &self.lookup_timeout)
-            .field("mode", &self.mode)
-            .field("recipient_overrides", &self.recipient_overrides)
-            .field("require_envelope_sender_match", &self.require_envelope_sender_match)
-            .field("signing_config", &self.signing_config)
-            .field("signing_senders", &"<omitted>")
-            .field("socket", &self.socket)
-            .field("trust_authenticated_senders", &self.trust_authenticated_senders)
-            .field("trusted_networks", &self.trusted_networks)
-            .field("verification_config", &self.verification_config)
-            .finish()
     }
 }

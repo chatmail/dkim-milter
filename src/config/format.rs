@@ -16,20 +16,19 @@
 
 //! Configuration file format.
 
-use crate::config::{
-    self,
-    model::{
-        ConfigOverrides, LogDestination, LogLevel, OpMode, PartialSigningConfig,
-        PartialVerificationConfig, SignedFieldName, SigningSender, SigningSenders, Socket,
-        SyslogFacility, TrustedNetworks,
+use crate::{
+    config::{
+        self,
+        model::{
+            ConfigOverrides, LogDestination, LogLevel, OpMode, PartialSigningConfig,
+            PartialVerificationConfig, SignedFieldName, Socket, SyslogFacility, TrustedNetworks,
+        },
+        params, CliOptions, Config, ConfigError, ConfigErrorKind, LogConfig,
     },
-    params,
-    tables::{self, TableError},
-    CliOptions, Config, ConfigError, ConfigErrorKind, LogConfig,
+    datastore,
 };
-use log::warn;
 use std::{
-    collections::{HashMap, HashSet},
+    collections::HashSet,
     error::Error,
     fmt::{self, Display, Formatter},
     str::FromStr,
@@ -42,7 +41,7 @@ use viadkim::signature::Canonicalization;
 #[derive(Debug)]
 pub enum ValidationError {
     MissingSocketParam,
-    UnusableSigningConfig,
+    MissingKeyId(Arc<str>),
     IncompatibleSigningConfigOverrides,
 }
 
@@ -52,7 +51,7 @@ impl Display for ValidationError {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
             Self::MissingSocketParam => write!(f, "missing mandatory socket parameter"),
-            Self::UnusableSigningConfig => write!(f, "unusable signing senders and/or keys configuration"),
+            Self::MissingKeyId(id) => write!(f, "missing key \"{id}\" referenced in signing senders"),
             Self::IncompatibleSigningConfigOverrides => write!(f, "applying overrides resulted in invalid signing configuration"),
         }
     }
@@ -98,7 +97,7 @@ impl Error for ParseConfigError {
             ReadSigningKeys(e)
             | ReadSigningSenders(e)
             | ReadConnectionOverrides(e)
-            | ReadRecipientOverrides(e) => Some(e),
+            | ReadRecipientOverrides(e) => Some(e.as_ref()),
         }
     }
 }
@@ -163,10 +162,10 @@ pub enum ParseParamError {
     InvalidMode(String),
     InvalidRejectFailure(String),
 
-    ReadSigningKeys(TableError),
-    ReadSigningSenders(TableError),
-    ReadConnectionOverrides(TableError),
-    ReadRecipientOverrides(TableError),
+    ReadSigningKeys(Box<dyn Error + Send + Sync>),
+    ReadSigningSenders(Box<dyn Error + Send + Sync>),
+    ReadConnectionOverrides(Box<dyn Error + Send + Sync>),
+    ReadRecipientOverrides(Box<dyn Error + Send + Sync>),
 }
 
 impl Error for ParseParamError {}
@@ -263,17 +262,17 @@ pub struct PartialLogConfig {
 #[derive(Clone, Debug, Default)]
 pub struct RawConfig {
     pub authserv_id: Option<String>,
-    pub connection_overrides_file: Option<(usize, String)>,
+    pub connection_overrides_datasource: Option<(usize, String)>,
     pub delete_incoming_authentication_results: Option<bool>,
     pub dry_run: Option<bool>,
     pub log_config: PartialLogConfig,
     pub lookup_timeout: Option<Duration>,
     pub mode: Option<OpMode>,
-    pub recipient_overrides_file: Option<(usize, String)>,
+    pub recipient_overrides_datasource: Option<(usize, String)>,
     pub require_envelope_sender_match: Option<bool>,
     pub signing_config: PartialSigningConfig,
-    pub signing_keys_file: Option<(usize, String)>,
-    pub signing_senders_file: Option<(usize, String)>,
+    pub signing_keys_datasource: Option<(usize, String)>,
+    pub signing_senders_datasource: Option<(usize, String)>,
     pub socket: Option<Socket>,
     pub trust_authenticated_senders: Option<bool>,
     pub trusted_networks: Option<TrustedNetworks>,
@@ -323,22 +322,7 @@ async fn parse_partial_log_config(file_content: &str) -> Result<PartialLogConfig
     Ok(config)
 }
 
-pub async fn read_config_overrides(file_name: &str) -> Result<ConfigOverrides, ConfigError> {
-    async {
-        let file_content = fs::read_to_string(file_name).await?;
-
-        let overrides = parse_config_overrides(&file_content).await?;
-
-        Ok(overrides)
-    }
-    .await
-    .map_err(|e| ConfigError {
-        file: file_name.into(),
-        kind: e,
-    })
-}
-
-async fn parse_config_overrides(file_content: &str) -> Result<ConfigOverrides, ParseConfigError> {
+pub async fn parse_config_overrides(file_content: &str) -> Result<ConfigOverrides, ParseConfigError> {
     let mut signing_config = PartialSigningConfig::default();
     let mut verification_config = PartialVerificationConfig::default();
 
@@ -373,24 +357,7 @@ async fn parse_config_overrides(file_content: &str) -> Result<ConfigOverrides, P
     })
 }
 
-pub async fn read_signing_config_overrides(
-    file_name: &str,
-) -> Result<PartialSigningConfig, ConfigError> {
-    async {
-        let file_content = fs::read_to_string(file_name).await?;
-
-        let overrides = parse_signing_config_overrides(&file_content).await?;
-
-        Ok(overrides)
-    }
-    .await
-    .map_err(|e| ConfigError {
-        file: file_name.into(),
-        kind: e,
-    })
-}
-
-async fn parse_signing_config_overrides(
+pub async fn parse_signing_config_overrides(
     file_content: &str,
 ) -> Result<PartialSigningConfig, ParseConfigError> {
     let mut signing_config = PartialSigningConfig::default();
@@ -451,16 +418,16 @@ async fn parse_raw_config(file_content: &str) -> Result<RawConfig, ConfigErrorKi
                 config.socket = Some(value);
             }
             "signing_keys" => {
-                config.signing_keys_file = Some((num, v.into()));
+                config.signing_keys_datasource = Some((num, v.into()));
             }
             "signing_senders" => {
-                config.signing_senders_file = Some((num, v.into()));
+                config.signing_senders_datasource = Some((num, v.into()));
             }
             "connection_overrides" => {
-                config.connection_overrides_file = Some((num, v.into()));
+                config.connection_overrides_datasource = Some((num, v.into()));
             }
             "recipient_overrides" => {
-                config.recipient_overrides_file = Some((num, v.into()));
+                config.recipient_overrides_datasource = Some((num, v.into()));
             }
             "delete_incoming_authentication_results" => {
                 let value = params::parse_boolean(v).map_err(|e| ParseConfigError::new(num, e))?;
@@ -554,26 +521,45 @@ pub async fn build_config(
 
     let mode = raw_config.mode.unwrap_or_default();
 
-    let signing_senders = match (
-        raw_config.signing_keys_file,
-        raw_config.signing_senders_file,
-    ) {
-        (Some(signing_keys_file), Some(signing_senders_file)) => {
-            let wants_sign = matches!(mode, OpMode::Sign | OpMode::Auto);
-            read_signing_config(wants_sign, &signing_keys_file, &signing_senders_file).await?
-        }
-        (None, None) => Default::default(),
-        _ => {
-            return Err(ValidationError::UnusableSigningConfig.into());
-        }
-    };
-
-    let connection_overrides = match raw_config.connection_overrides_file {
-        Some(connection_overrides_file) => {
-            let overrides = tables::read_connection_overrides_table(&connection_overrides_file.1)
+    let signing_senders = match raw_config.signing_senders_datasource {
+        Some(datasource) => {
+            let signing_senders = datastore::read_signing_senders(&datasource.1)
                 .await
                 .map_err(|e| ParseConfigError::new(
-                    connection_overrides_file.0,
+                    datasource.0,
+                    ParseParamError::ReadSigningSenders(e),
+                ))?;
+            Some(signing_senders)
+        }
+        None => None,
+    };
+
+    let signing_keys = match raw_config.signing_keys_datasource {
+        Some(datasource) => {
+            let signing_keys = datastore::read_signing_keys(&datasource.1)
+                .await
+                .map_err(|e| ParseConfigError::new(
+                    datasource.0,
+                    ParseParamError::ReadSigningKeys(e),
+                ))?;
+            Some(signing_keys)
+        }
+        None => None,
+    };
+
+    // Hack: Ensure data integrity specifically for an in-memory signing setup.
+    if let (Some(signing_senders), Some(signing_keys)) = (&signing_senders, &signing_keys) {
+        let ids = signing_senders.get_cached_key_ids();
+        signing_keys.check_cached_key_ids(ids)
+            .map_err(ValidationError::MissingKeyId)?;
+    }
+
+    let connection_overrides = match raw_config.connection_overrides_datasource {
+        Some(datasource) => {
+            let overrides = datastore::read_connection_overrides(&datasource.1)
+                .await
+                .map_err(|e| ParseConfigError::new(
+                    datasource.0,
                     ParseParamError::ReadConnectionOverrides(e),
                 ))?;
             Some(overrides)
@@ -581,12 +567,12 @@ pub async fn build_config(
         None => None,
     };
 
-    let recipient_overrides = match raw_config.recipient_overrides_file {
-        Some(recipient_overrides_file) => {
-            let overrides = tables::read_recipient_overrides_table(&recipient_overrides_file.1)
+    let recipient_overrides = match raw_config.recipient_overrides_datasource {
+        Some(datasource) => {
+            let overrides = datastore::read_recipient_overrides(&datasource.1)
                 .await
                 .map_err(|e| ParseConfigError::new(
-                    recipient_overrides_file.0,
+                    datasource.0,
                     ParseParamError::ReadRecipientOverrides(e),
                 ))?;
             Some(overrides)
@@ -618,6 +604,7 @@ pub async fn build_config(
         recipient_overrides,
         require_envelope_sender_match,
         signing_config,
+        signing_keys,
         signing_senders,
         socket,
         trust_authenticated_senders,
@@ -626,74 +613,6 @@ pub async fn build_config(
     };
 
     Ok(config)
-}
-
-async fn read_signing_config(
-    wants_sign: bool,
-    signing_keys_file: &(usize, String),
-    signing_senders_file: &(usize, String),
-) -> Result<SigningSenders, ParseConfigError> {
-    // Note: idea here is to warn but continue with an incomplete config and
-    // only actually log an error when the milter is unable to sign a message
-    // (for example, such a config does not prevent *verification* from working properly)
-
-    let signing_keys = tables::read_signing_keys_table(&signing_keys_file.1)
-        .await
-        .map_err(|e| ParseConfigError {
-            line: signing_keys_file.0,
-            kind: ParseParamError::ReadSigningKeys(e),
-        })?;
-
-    if signing_keys.is_empty() && wants_sign {
-        warn!("no signing keys available, no signing will be done");
-    }
-
-    let mut signing_senders = tables::read_signing_senders_table(&signing_senders_file.1)
-        .await
-        .map_err(|e| ParseConfigError {
-            line: signing_senders_file.0,
-            kind: ParseParamError::ReadSigningSenders(e),
-        })?;
-
-    signing_senders.retain(|entry| {
-        let ret = signing_keys.contains_key(&entry.key_name);
-        if !ret {
-            warn!("key name \"{}\" not found in signing keys, ignoring entry", entry.key_name);
-        }
-        ret
-    });
-
-    let mut key_names: HashSet<_> = signing_keys.keys().collect();
-
-    for entry in &signing_senders {
-        key_names.remove(&entry.key_name);
-    }
-
-    for name in key_names {
-        warn!("unused signing key \"{name}\" found in signing keys");
-    }
-
-    if signing_senders.is_empty() && wants_sign {
-        warn!("no signing senders available, no signing will be done");
-    }
-
-    let key_store: HashMap<_, _> = signing_keys.into_iter()
-        .map(|(k, v)| (k, Arc::new(v)))
-        .collect();
-
-    let entries: Vec<_> = signing_senders.into_iter()
-        .map(|entry| SigningSender {
-            sender_expr: entry.sender_expr,
-            domain: entry.domain_expr,
-            selector: entry.selector,
-            key: Arc::clone(key_store.get(&entry.key_name).unwrap()),
-            signing_config: entry.signing_config,
-        })
-        .collect();
-
-    let signing_senders = SigningSenders { entries };
-
-    Ok(signing_senders)
 }
 
 fn parse_log_config_param(

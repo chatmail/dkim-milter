@@ -26,6 +26,7 @@
 mod auth_results;
 mod callbacks;
 mod config;
+mod datastore;
 mod format;
 mod resolver;
 mod session;

@@ -88,6 +88,7 @@ is an integer optionally followed by
 A
 .I colon-separated
 value is a possibly empty list or set of elements separated by “:”.
+To do: rewrite for data sources, document data sources.
 A
 .I table
 is a (path to a) table, that is, a file containing lines with
@@ -124,6 +125,9 @@ verification parameters.
 .IP
 When processing a message, if an entry matches the connecting IP address, its
 associated configuration parameters override the main configuration settings.
+.IP
+Note that if the data source lookup fails, the current message transaction is
+aborted with a transient SMTP error.
 .TP
 .BR delete_incoming_authentication_results " (\fIboolean\fR)"
 Whether to delete incoming
@@ -210,6 +214,9 @@ When processing a message, if an entry matches an envelope recipient addresses
 .IR "RCPT TO" ),
 its associated configuration parameters override the main configuration
 settings.
+.IP
+Note that if the data source lookup fails, the current message transaction is
+aborted with a transient SMTP error.
 .TP
 .BR require_envelope_sender_match " (\fIboolean\fR)"
 Whether to accept for signing only senders (in the
@@ -236,6 +243,9 @@ RSA or Ed25519 signing key.
 .IP
 When signing a message, if an entry is selected via its key name, then the
 associated signing key is used to produce the cryptographic signature.
+.IP
+Note that if the data source lookup fails, the current message transaction is
+aborted with a transient SMTP error.
 .TP
 .BR signing_senders " (\fItable\fR)"
 File path to a table listing the available signing senders.
@@ -285,6 +295,9 @@ The signing key referred to by name in column (4) is used to calculate the
 cryptographic signature.
 Finally, the optional associated signing configuration parameters in column (5)
 override the main configuration settings.
+.IP
+Note that if the data source lookup fails, the current message transaction is
+aborted with a transient SMTP error.
 .TP
 .BR socket " (\fIsocket-spec\fR)"
 The listening socket of the milter.

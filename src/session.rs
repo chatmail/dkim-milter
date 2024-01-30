@@ -17,16 +17,18 @@
 use crate::{
     auth_results,
     config::{
-        model::{ConfigOverrides, DomainExpr, OpMode, PartialSigningConfig, SigningSenders},
+        self,
+        model::{ConfigOverrides, OpMode},
         Config, SessionConfig,
     },
+    datastore::{self, SenderMatch},
     format::{self, AddrSpec, MailAddr},
     sign::Signer,
     util,
     verify::Verifier,
 };
 use indymilter::{ActionError, ContextActions, SetErrorReply, Status};
-use log::{debug, warn};
+use log::{debug, error, warn};
 use std::{
     borrow::Cow,
     error::Error,
@@ -37,9 +39,8 @@ use std::{
     sync::Arc,
 };
 use viadkim::{
-    crypto::SigningKey,
     header::{FieldBody, FieldName, HeaderField, HeaderFields},
-    signature::{DomainName, Selector},
+    signature::DomainName,
 };
 
 #[derive(Default)]
@@ -59,7 +60,6 @@ enum SenderAddrError {
 struct ConnectionData {
     ip: Option<IpAddr>,
     hostname: Option<String>,
-    connection_overrides: Option<ConfigOverrides>,
 }
 
 impl ConnectionData {
@@ -69,13 +69,6 @@ impl ConnectionData {
 
     fn hostname(&self) -> &str {
         self.hostname.as_deref().expect("no hostname available")
-    }
-
-    // Connection overrides can be calculated once for the connection and then
-    // cached.
-    fn get_connection_overrides(&mut self, config: &Config) -> &ConfigOverrides {
-        self.connection_overrides
-            .get_or_insert_with(|| get_connection_overrides(self.ip, config))
     }
 }
 
@@ -249,7 +242,10 @@ impl Session {
     // This step ends the header processing bit, and so will freely remove
     // certain things from the message-scoped data *that is not used further
     // down*.
-    pub async fn init_processing(&mut self, id: &str) -> Result<Status, Box<dyn Error>> {
+    pub async fn init_processing(
+        &mut self,
+        id: &str,
+    ) -> Result<Status, Box<dyn Error + Send + Sync>> {
         let message = match self.message.as_mut() {
             Some(message) => message,
             None => return Err("message context not available".into()),
@@ -283,7 +279,7 @@ impl Session {
         // verifying.
         let authorized = is_trusted_sender(id, config, self.conn.ip, message.auth);
 
-        let mode = match (config.mode, authorized) {
+        match (config.mode, authorized) {
             (OpMode::Sign | OpMode::Auto, Auth::Trusted) => {
                 let sender = match extract_sender(id, sender_address, from_addresses) {
                     Some(sender) => sender,
@@ -293,7 +289,29 @@ impl Session {
                     }
                 };
 
-                let matches = find_matching_senders(&config.signing_senders, &sender).await;
+                let match_result = match (
+                    config.signing_senders.as_deref(),
+                    config.signing_keys.as_deref(),
+                ) {
+                    (Some(senders), Some(keys)) => {
+                        datastore::find_matching_senders(senders, keys, &sender).await
+                    }
+                    _ => {
+                        debug!("{id}: not signing message, no signing senders or keys available");
+                        return Ok(Status::Continue);
+                    }
+                };
+
+                let matches = match match_result {
+                    Ok(matches) => matches,
+                    Err(e) => {
+                        // Log at error level: Failure to provide service due to
+                        // configuration lookup error (ie, a user error!).
+                        config::log_errors(Some(id), e.as_ref());
+                        error!("{id}: failed to look up signing senders or keys, aborting message transaction");
+                        return Ok(Status::Tempfail);
+                    }
+                };
 
                 if matches.is_empty() {
                     debug!("{id}: not signing message from trusted sender not configured for signing");
@@ -312,7 +330,7 @@ impl Session {
                     return Ok(Status::Continue);
                 }
 
-                self.enter_signing_mode(id, headers, sender, matches).await?
+                self.enter_signing_mode(id, headers, sender, matches).await
             }
             (OpMode::Verify | OpMode::Auto, Auth::Untrusted) => {
                 let from_addresses = match from_addresses {
@@ -321,22 +339,20 @@ impl Session {
                         .collect(),
                     _ => vec![],
                 };
-                self.enter_verifying_mode(id, headers, from_addresses).await
+
+                let status = self.enter_verifying_mode(id, headers, from_addresses).await;
+
+                Ok(status)
             }
             (OpMode::Sign, Auth::Untrusted) => {
                 debug!("{id}: not signing message from untrusted sender");
-                return Ok(Status::Continue);
+                Ok(Status::Continue)
             }
             (OpMode::Verify, Auth::Trusted) => {
                 debug!("{id}: not verifying message from trusted sender");
-                return Ok(Status::Continue);
+                Ok(Status::Continue)
             }
-        };
-
-        let message = self.message.as_mut().unwrap();
-        message.mode = mode;
-
-        Ok(Status::Continue)
+        }
     }
 
     async fn enter_signing_mode(
@@ -345,19 +361,36 @@ impl Session {
         headers: HeaderFields,
         sender: MailAddr,
         matches: Vec<SenderMatch>,
-    ) -> Result<Mode, Box<dyn Error>> {
+    ) -> Result<Status, Box<dyn Error + Send + Sync>> {
         debug!("{id}: entered signing mode");
 
-        let connection_overrides =
-            self.conn.get_connection_overrides(&self.session_config.config);
+        let config = &self.session_config.config;
 
-        let recipients = &self.message.as_ref().unwrap().env_recipients;
-        let recipient_overrides =
-            get_recipient_overrides(recipients, &self.session_config.config);
+        let connection_overrides = match get_connection_overrides(self.conn.ip, config).await {
+            Ok(o) => o,
+            Err(e) => {
+                config::log_errors(Some(id), e.as_ref());
+                error!("{id}: failed to look up connection overrides, aborting message transaction");
+                return Ok(Status::Tempfail);
+            }
+        };
+
+        let message = self.message.as_mut().unwrap();
+
+        let recipients = mem::take(&mut message.env_recipients);
+
+        let recipient_overrides = match get_recipient_overrides(recipients, config).await {
+            Ok(o) => o,
+            Err(e) => {
+                config::log_errors(Some(id), e.as_ref());
+                error!("{id}: failed to look up recipient overrides, aborting message transaction");
+                return Ok(Status::Tempfail);
+            }
+        };
 
         let signer = Signer::init(
             id,
-            &self.session_config.config,
+            config,
             headers,
             &sender,
             matches,
@@ -365,7 +398,9 @@ impl Session {
             &recipient_overrides.signing_config,
         )?;
 
-        Ok(Mode::Signing(signer))
+        message.mode = Mode::Signing(signer);
+
+        Ok(Status::Continue)
     }
 
     async fn enter_verifying_mode(
@@ -373,15 +408,32 @@ impl Session {
         id: &str,
         headers: HeaderFields,
         from_addresses: Vec<MailAddr>,
-    ) -> Mode {
+    ) -> Status {
         debug!("{id}: entered verifying mode");
 
-        let connection_overrides =
-            self.conn.get_connection_overrides(&self.session_config.config);
+        let config = &self.session_config.config;
 
-        let recipients = &self.message.as_ref().unwrap().env_recipients;
-        let recipient_overrides =
-            get_recipient_overrides(recipients, &self.session_config.config);
+        let connection_overrides = match get_connection_overrides(self.conn.ip, config).await {
+            Ok(o) => o,
+            Err(e) => {
+                config::log_errors(Some(id), e.as_ref());
+                error!("{id}: failed to look up connection overrides, aborting message transaction");
+                return Status::Tempfail;
+            }
+        };
+
+        let message = self.message.as_mut().unwrap();
+
+        let recipients = mem::take(&mut message.env_recipients);
+
+        let recipient_overrides = match get_recipient_overrides(recipients, config).await {
+            Ok(o) => o,
+            Err(e) => {
+                config::log_errors(Some(id), e.as_ref());
+                error!("{id}: failed to look up recipient overrides, aborting message transaction");
+                return Status::Tempfail;
+            }
+        };
 
         let verifier = Verifier::init(
             &self.session_config,
@@ -392,7 +444,9 @@ impl Session {
         )
         .await;
 
-        Mode::Verifying(verifier)
+        message.mode = Mode::Verifying(verifier);
+
+        Status::Continue
     }
 
     pub fn process_body_chunk(&mut self, chunk: &[u8]) -> Result<Status, Box<dyn Error>> {
@@ -710,84 +764,44 @@ pub fn authserv_id<'a>(config: &'a Config, hostname: &'a str) -> &'a str {
     config.authserv_id.as_deref().unwrap_or(hostname)
 }
 
-#[derive(Clone, Debug)]
-pub struct SenderMatch {
-    pub domain: DomainExpr,
-    pub selector: Selector,
-    pub key: Arc<SigningKey>,
-    pub signing_config: Option<PartialSigningConfig>,
-}
-
-// `async` because ultimately this might become a DB lookup.
-async fn find_matching_senders(
-    signing_senders: &SigningSenders,
-    sender: &MailAddr,
-) -> Vec<SenderMatch> {
-    let MailAddr { local_part, domain } = sender;
-
-    // Look up email address with domain-part converted to ASCII form.
-    let addr = format!("{local_part}@{}", domain.to_ascii());
-
-    let mut matches = vec![];
-
-    for entry in &signing_senders.entries {
-        if entry.sender_expr.is_match(&addr) {
-            matches.push(SenderMatch {
-                domain: entry.domain.clone(),
-                selector: entry.selector.clone(),
-                key: entry.key.clone(),
-                signing_config: entry.signing_config.clone(),
-            });
-        }
-    }
-
-    matches
-}
-
-fn get_connection_overrides(ip: Option<IpAddr>, config: &Config) -> ConfigOverrides {
+async fn get_connection_overrides(
+    ip: Option<IpAddr>,
+    config: &Config,
+) -> Result<ConfigOverrides, Box<dyn Error + Send + Sync>> {
     let mut result = ConfigOverrides::default();
 
     if let Some(connection_overrides) = &config.connection_overrides {
         if let Some(ip) = ip {
-            for entry in &connection_overrides.entries {
-                if entry.net.contains(&ip) {
-                    result.merge(&entry.config);
-                    break;
-                }
+            let entries = connection_overrides.find_all(ip).await?;
+
+            // While all applicable overrides have been retrieved, only apply
+            // the first one for now.
+            if let Some(entry) = entries.into_iter().next() {
+                result.merge(&entry);
             }
         }
     }
 
-    result
+    Ok(result)
 }
 
-fn get_recipient_overrides(recipients: &[String], config: &Config) -> ConfigOverrides {
+async fn get_recipient_overrides(
+    recipients: Vec<String>,
+    config: &Config,
+) -> Result<ConfigOverrides, Box<dyn Error + Send + Sync>> {
     let mut result = ConfigOverrides::default();
 
     if let Some(recipient_overrides) = &config.recipient_overrides {
-        'rcpts: for recipient in recipients {
-            let recipient_ascii_domain = recipient.rsplit_once('@').and_then(|(l, d)| {
-                let domain = DomainName::new(d).ok()?.to_ascii();
-                Some(format!("{l}@{domain}"))
-            });
+        let entries = recipient_overrides.find_all(recipients).await?;
 
-            for entry in &recipient_overrides.entries {
-                if entry.expr.is_match(recipient) {
-                    // Does the expr match the recipient string directly?
-                    result.merge(&entry.config);
-                    break 'rcpts;
-                } else if let Some(recipient) = &recipient_ascii_domain {
-                    // Or does it match the recipient with normalised domain?
-                    if entry.expr.is_match(recipient) {
-                        result.merge(&entry.config);
-                        break 'rcpts;
-                    }
-                }
-            }
+        // While all applicable overrides have been retrieved, only apply the
+        // first one for now.
+        if let Some(entry) = entries.into_iter().next() {
+            result.merge(&entry);
         }
     }
 
-    result
+    Ok(result)
 }
 
 async fn delete_auth_results_headers(
@@ -817,45 +831,6 @@ async fn delete_auth_results_headers(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::model::SigningSender;
-    use regex::Regex;
-
-    #[tokio::test]
-    async fn find_matching_senders_ok() {
-        let domain = DomainExpr::Domain(DomainName::new("example.com").unwrap());
-        let selector = Selector::new("sel1").unwrap();
-        let signing_key = Arc::new(
-            SigningKey::from_pkcs8_pem(
-                "-----BEGIN PRIVATE KEY-----\n\
-                MC4CAQAwBQYDK2VwBCIEIH1M+KJ5Nln5QmygpruhNrykdHC9AwB8B7ACiiWMp/tQ\n\
-                -----END PRIVATE KEY-----",
-            )
-            .unwrap(),
-        );
-
-        let signing_senders = SigningSenders {
-            entries: vec![SigningSender {
-                sender_expr: Regex::new(".*@mail.example.com").unwrap(),
-                domain: domain.clone(),
-                selector: selector.clone(),
-                key: signing_key.clone(),
-                signing_config: None,
-            }],
-        };
-
-        let from_address = MailAddr {
-            local_part: "itsame".into(),
-            domain: DomainName::new("mail.example.com").unwrap(),
-        };
-
-        let matches = find_matching_senders(&signing_senders, &from_address).await;
-
-        assert_eq!(matches.len(), 1);
-
-        let match_ = matches.into_iter().next().unwrap();
-
-        assert_eq!(match_.selector, selector);
-    }
 
     #[test]
     fn validate_rfc5322_ok() {

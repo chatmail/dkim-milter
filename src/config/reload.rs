@@ -15,7 +15,7 @@
 // this program. If not, see <https://www.gnu.org/licenses/>.
 
 use crate::{
-    config::{get_default_config_file, CliOptions, Config, SessionConfig},
+    config::{self, CliOptions, Config, SessionConfig},
     resolver::{DomainResolver, Resolver},
 };
 use log::{error, info, warn};
@@ -25,14 +25,15 @@ use std::{
 };
 
 pub async fn reload(current_session_config: &RwLock<Arc<SessionConfig>>, opts: &CliOptions) {
-    let config_file = get_default_config_file(opts);
+    let config_file = config::get_default_config_file(opts);
 
     info!("reloading configuration");
 
     let mut config = match Config::read(opts).await {
         Ok(config) => config,
         Err(e) => {
-            error!("failed to reload configuration: {e}");
+            config::log_errors(None, &e);
+            error!("failed to reload configuration");
             return;
         }
     };
