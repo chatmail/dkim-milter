@@ -9,6 +9,8 @@ minimum supported Rust version being considered breaking changes.
 
 ## 0.2.0 (unreleased)
 
+The minimum supported Rust version is now 1.71.1.
+
 ### Added
 
 * New data source (see below) `file:` has been added to support for data being
@@ -19,6 +21,8 @@ minimum supported Rust version being considered breaking changes.
   This data source is enabled with new Cargo feature `sqlite`.
 
 ### Changed
+
+* The minimum supported Rust version has been raised to 1.71.1.
 
 * Parameters formerly pointing to table-like files now recognise a *data source*
   prefix. This concerns parameters `signing_senders`, `signing_keys`,
