@@ -27,8 +27,11 @@ use crate::{
 };
 use futures_util::stream::TryStreamExt;
 use log::warn;
-use sqlx::{sqlite::SqliteConnectOptions, ConnectOptions, Connection, Row, SqliteConnection};
+use sqlx::{
+    sqlite::SqliteConnectOptions, ConnectOptions, Connection, QueryBuilder, Row, SqliteConnection,
+};
 use std::{
+    collections::HashMap,
     error::Error,
     fmt::{self, Display, Formatter},
     net::IpAddr,
@@ -264,48 +267,63 @@ async fn find_signing_keys(
     table_name: Option<&str>,
     key_ids: Vec<Arc<str>>,
 ) -> Result<Vec<Arc<SigningKey>>, SqlErrorKind> {
+    // Important to shortcut as an empty input leads to invalid SQL below.
+    if key_ids.is_empty() {
+        return Ok(vec![]);
+    }
+
     let mut conn = connect(url).await?;
 
-    let mut resolved_names = vec![];
-
-    for key_id in key_ids {
-        let key = match find_signing_key(&mut conn, table_name, key_id).await {
-            Ok(k) => k,
-            Err(e) => {
-                let _ = conn.close().await;
-                return Err(e);
-            }
-        };
-
-        resolved_names.push(key);
-    }
+    let result = find_signing_keys_conn(&mut conn, table_name, &key_ids).await;
 
     close_or_warn(conn).await;
 
-    Ok(resolved_names)
+    let map = result?;
+
+    let keys = key_ids.into_iter()
+        .map(|k| {
+            map.get(k.as_ref())
+                .cloned()
+                .ok_or(SqlErrorKind::MissingKeyId(k))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+
+    Ok(keys)
 }
 
-async fn find_signing_key(
+async fn find_signing_keys_conn(
     conn: &mut SqliteConnection,
     table_name: Option<&str>,
-    key_id: Arc<str>,
-) -> Result<Arc<SigningKey>, SqlErrorKind> {
+    key_ids: &[Arc<str>],
+) -> Result<HashMap<String, Arc<SigningKey>>, SqlErrorKind> {
     let table_name = table_name.unwrap_or("signing_keys");
-    let q = format!("SELECT key_pem FROM {table_name} WHERE key_id = ?");
 
-    let row = sqlx::query(&q)
-        .bind(key_id.as_ref())
-        .fetch_optional(conn)
-        .await?;
+    let mut query = QueryBuilder::new(format!(
+        "SELECT key_id, key_pem FROM {table_name} WHERE key_id IN ("
+    ));
 
-    let row = row.ok_or(SqlErrorKind::MissingKeyId(key_id))?;
+    let mut qargs = query.separated(", ");
+    for key_id in key_ids {
+        qargs.push_bind(key_id.as_ref());
+    }
+    qargs.push_unseparated(")");
 
-    let key_pem: &str = row.try_get("key_pem")?;
+    let q = query.build();
 
-    let signing_key = SigningKey::from_pkcs8_pem(key_pem)
-        .map_err(DataFormatError::ParseSigningKey)?;
+    let mut map = HashMap::with_capacity(key_ids.len());
 
-    Ok(Arc::new(signing_key))
+    let mut rows = q.fetch(conn);
+
+    while let Some(row) = rows.try_next().await? {
+        let key_id: &str = row.try_get("key_id")?;
+        let key_pem: &str = row.try_get("key_pem")?;
+
+        let key = SigningKey::from_pkcs8_pem(key_pem).map_err(DataFormatError::ParseSigningKey)?;
+
+        map.insert(key_id.into(), key.into());
+    }
+
+    Ok(map)
 }
 
 #[derive(Debug)]

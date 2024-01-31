@@ -49,16 +49,37 @@ CREATE TABLE recipient_overrides (
 -- Example data
 --
 
-INSERT INTO signing_keys VALUES ('key1', '-----BEGIN PRIVATE KEY-----
+INSERT INTO signing_keys VALUES
+  ('key1', '-----BEGIN PRIVATE KEY-----
 MC4CAQAwBQYDK2VwBCIEIAKCYaurTirsbpkHt/ey/U4ojE2KtJE9i6MjO9a23QPh
+-----END PRIVATE KEY-----'),
+  ('key2', '-----BEGIN PRIVATE KEY-----
+MIICeAIBADANBgkqhkiG9w0BAQEFAASCAmIwggJeAgEAAoGBAMA2F64ztjcTa50Z
+/tZAcgwuqAxSEYhYZriq1q7wZTaAT/dy/O7oGC1qzcxo30FNuklBD2UOv3lHJ/PZ
+l18SyuLGd9FndwHGBdvH+0JYGNFWOKNvNdhQZNsPR0SFE3V/vDrOtoE2tbFCJopT
+hskBB+Et1epjCLNlAAtu4tDYqYBVAgMBAAECgYAks6994f3vMlQgIXCZtKCSVu5b
+u+gBIvAqXuSzbs/EwmeCloBZlhPXyEcXuwa2T4M8raGk6FYDcGTemTPgQZRfuEcp
+Xm/e0xl+d2KzZsjIRMG8kQgCnmDwP15dYhDVjekPh+H75k9uoI9VlJ1NdE32Ea6l
+mkBUY9PXJXHDQflogQJBAOVS0LMCMESPddhORBXH6s1cAyLkzIPOmD/lViGFWPzy
+YZlWuNpVawDdIpdzg2CI/QhNTUnD+TKFz5MHfJOgfhECQQDWkhZQ2IqU4+S2FewF
+mHqSUBmNUUIAo4uXEnXjSORxeB0GX6oUDbDBOeVXnOfmjX1rHTALRvbpHRfedOgZ
+FGoFAkEAnKZVqfJ0xmC5P2k3WSmXW3DfM5bXnbIijoM6sutEPoXT5cs3uu1eitiE
+KLDfrbHmJyWnBhy4vapqgSU8FBwuAQJBAMpPM3tGsGNx/FMymDcubWNG4tC7rN+t
+VBA896o1MC9McRFxYYtG3UFStUrGRmC7R2WXP5Vic6uYIsk8sRn0hYECQQDLS+ES
+Bub386hfXcbnrvm6I8QFGfstpLPuU9QCGxFEWPLynpjTz+ik9mt7PMFVj33qMmgk
+SxY0BJN2TMkg+O9j
 -----END PRIVATE KEY-----');
 
-INSERT INTO signing_senders VALUES ('example.com', 'example.com', 'default', NULL, 'key1');
+INSERT INTO signing_senders VALUES
+  ('example.com', 'example.com', 'sel1', NULL, 'key1'),
+  ('example.com', 'example.com', 'sel2', NULL, 'key2');
 
-INSERT INTO connection_overrides VALUES ('1.2.3.0/24', 'expiration = never
+INSERT INTO connection_overrides VALUES
+  ('1.2.3.0/24', 'expiration = never
 limit_body_length = no
 ');
 
-INSERT INTO recipient_overrides VALUES ('.example.com', 'expiration = never
+INSERT INTO recipient_overrides VALUES
+  ('.example.com', 'expiration = never
 limit_body_length = no
 ');

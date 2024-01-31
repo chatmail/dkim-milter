@@ -284,7 +284,7 @@ by the table name, if needed.
 Example:
 
 ```
-signing_keys = sqlite://mail-config.db#milter_signing_keys
+signing_keys = sqlite://mail-config.db#dkim_signing_keys
 ```
 
 The database schema is documented elsewhere in this project.
