@@ -24,15 +24,14 @@ use crate::{
         PartialSigningConfig,
     },
     format::MailAddr,
+    util::BoxFuture,
 };
 use ipnet::IpNet;
 use regex::Regex;
 use std::{
     error::Error,
     fmt,
-    future::Future,
     net::{AddrParseError, IpAddr},
-    pin::Pin,
     str::FromStr,
     sync::Arc,
 };
@@ -93,8 +92,6 @@ pub async fn find_matching_senders(
 
     Ok(sender_matches)
 }
-
-pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
 pub type SigningSendersResult = Result<Vec<UnresolvedSenderMatch>, Box<dyn Error + Send + Sync>>;
 

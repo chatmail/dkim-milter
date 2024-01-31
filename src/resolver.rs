@@ -14,7 +14,7 @@
 // You should have received a copy of the GNU General Public License along with
 // this program. If not, see <https://www.gnu.org/licenses/>.
 
-use crate::util;
+use crate::util::{self, BoxFuture};
 use domain::{
     base::{iana::Rcode, Dname, Rtype},
     rdata::Txt,
@@ -24,16 +24,13 @@ use domain::{
     },
 };
 use std::{
-    future::Future,
     io::{self, ErrorKind},
-    pin::Pin,
     sync::Arc,
     time::Duration,
 };
 use viadkim::verifier::LookupTxt;
 
-pub type LookupFuture<'a> =
-    Pin<Box<dyn Future<Output = io::Result<Vec<io::Result<Vec<u8>>>>> + Send + 'a>>;
+pub type LookupFuture<'a> = BoxFuture<'a, io::Result<Vec<io::Result<Vec<u8>>>>>;
 
 #[derive(Clone)]
 pub struct MockLookupTxt {
@@ -48,7 +45,7 @@ impl MockLookupTxt {
 
 impl LookupTxt for MockLookupTxt {
     type Answer = Vec<io::Result<Vec<u8>>>;
-    type Query<'a> = Pin<Box<dyn Future<Output = io::Result<Self::Answer>> + Send + 'a>>;
+    type Query<'a> = BoxFuture<'a, io::Result<Self::Answer>>;
 
     fn lookup_txt(&self, domain: &str) -> Self::Query<'_> {
         let domain = domain.to_owned();
@@ -88,7 +85,7 @@ impl DomainResolver {
 
 impl LookupTxt for DomainResolver {
     type Answer = Vec<io::Result<Vec<u8>>>;
-    type Query<'a> = Pin<Box<dyn Future<Output = io::Result<Self::Answer>> + Send + 'a>>;
+    type Query<'a> = BoxFuture<'a, io::Result<Self::Answer>>;
 
     fn lookup_txt(&self, domain: &str) -> Self::Query<'_> {
         let dname = Dname::vec_from_str(domain);

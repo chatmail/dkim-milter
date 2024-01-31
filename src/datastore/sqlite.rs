@@ -20,10 +20,10 @@ use crate::{
         model::ConfigOverrides,
     },
     datastore::{
-        self, BoxFuture, ConfigOverridesResult, ConnectionOverridesDb, RecipientOverridesDb,
-        SigningKeysDb, SigningKeysResult, SigningSendersDb, SigningSendersResult,
-        UnresolvedSenderMatch,
+        self, ConfigOverridesResult, ConnectionOverridesDb, RecipientOverridesDb, SigningKeysDb,
+        SigningKeysResult, SigningSendersDb, SigningSendersResult, UnresolvedSenderMatch,
     },
+    util::BoxFuture,
 };
 use futures_util::stream::TryStreamExt;
 use log::warn;

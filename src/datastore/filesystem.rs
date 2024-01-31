@@ -21,10 +21,10 @@ use crate::{
         ConfigError,
     },
     datastore::{
-        self, BoxFuture, ConfigOverridesResult, ConnectionOverridesDb, RecipientOverridesDb,
-        SigningKeysDb, SigningKeysResult, SigningSendersDb, SigningSendersResult,
-        UnresolvedSenderMatch,
+        self, ConfigOverridesResult, ConnectionOverridesDb, RecipientOverridesDb, SigningKeysDb,
+        SigningKeysResult, SigningSendersDb, SigningSendersResult, UnresolvedSenderMatch,
     },
+    util::BoxFuture,
 };
 use ipnet::IpNet;
 use regex::Regex;
