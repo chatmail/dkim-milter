@@ -32,6 +32,10 @@ minimum supported Rust version being considered breaking changes.
   With this change, reading and validation of table files has been overhauled,
   and some error messages have been adjusted.
 
+* Configuration errors detected at runtime now result in a transient SMTP error
+  reply being sent to the client. Previously, configuration was always validated
+  eagerly and such errors were not possible.
+
 ## 0.1.0 (2023-12-27)
 
 Initial release.

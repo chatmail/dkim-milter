@@ -1,5 +1,5 @@
 --
--- Schema for SQLite (draft)
+-- Schema for SQLite
 --
 
 -- Table signing_keys

@@ -88,15 +88,49 @@ is an integer optionally followed by
 A
 .I colon-separated
 value is a possibly empty list or set of elements separated by “:”.
-To do: rewrite for data sources, document data sources.
+.PP
 A
+.I data source
+is some persistent storage providing a list or set of configuration data.
+Currently, the following data sources are available.
+The
+.I cached
+or
+.I in-memory filesystem data source
+is represented as a path prefixed with
+.B <
+or
+.B slurp:
+(for example,
+.BR </path/to/file ).
+Data is read from this file at startup, and the filesystem is not accessed
+during operation.
+The
+.I live filesystem data source
+is represented as a path prefixed with
+.B file:
+(for example,
+.BR file:/path/to/file ).
+Data is read from this file on demand, and discarded from memory after use.
+The term
 .I table
-is a (path to a) table, that is, a file containing lines with
-whitespace-separated columns of table-specific data.
+is used to refer to a filesystem data source containing tabular data.
+A table contains lines with whitespace-separated columns of table-specific data.
 As in configuration files, blank lines and lines whose first non-blank character
 is
 .B #
 are ignored in tables.
+Further, the
+.I SQLite data source
+is represented as an SQLite database URI with prefix
+.B sqlite:
+(for example,
+.BR sqlite://dkim-milter.db ).
+Data is queried from a table in this database when needed.
+The table name can be customized by appending “#” followed by the table name.
+This data source is only available if DKIM Milter was compiled with feature
+“sqlite”.
+The database schema is documented elsewhere.
 .SS General parameters
 General parameters allow configuration of basic properties of DKIM Milter.
 These parameters are available only in the main configuration file.
@@ -117,11 +151,12 @@ value.
 Defaults to the MTA’s hostname (the value of the sendmail macro
 .BR j ).
 .TP
-.BR connection_overrides " (\fItable\fR)"
-File path to a table listing per-connection configuration overrides.
+.BR connection_overrides " (\fIdata-source\fR)"
+Data source providing a list of per-connection configuration overrides.
+The following describes the filesystem data source (pointing to a table).
 The table should list, in whitespace-separated columns, (1) a network address,
-(2) the path to a configuration file, prefixed with “<”, containing signing and
-verification parameters.
+(2) a filesystem data source pointing to a configuration file containing signing
+and verification parameters.
 .IP
 When processing a message, if an entry matches the connecting IP address, its
 associated configuration parameters override the main configuration settings.
@@ -202,11 +237,12 @@ the milter performs verification for untrusted senders, but does not sign.
 The default is
 .BR auto .
 .TP
-.BR recipient_overrides " (\fItable\fR)"
-File path to a table listing per-recipient configuration overrides.
+.BR recipient_overrides " (\fIdata-source\fR)"
+Data source providing a list of per-recipient configuration overrides.
+The following describes the filesystem data source (pointing to a table).
 The table should list, in whitespace-separated columns, (1) a recipient
-expression (the same format as a sender expression, see below), (2) the path to
-a configuration file, prefixed with “<”, containing signing and verification
+expression (the same format as a sender expression, see below), (2) a filesystem
+data source pointing to a configuration file containing signing and verification
 parameters.
 .IP
 When processing a message, if an entry matches an envelope recipient addresses
@@ -235,11 +271,12 @@ user would be able to use signing key and configuration for a different user.
 The default is
 .BR no .
 .TP
-.BR signing_keys " (\fItable\fR)"
-File path to a table listing the available signing keys.
+.BR signing_keys " (\fIdata-source\fR)"
+Data source providing the available signing keys.
+The following describes the filesystem data source (pointing to a table).
 The table should list, in whitespace-separated columns, (1) a unique, arbitrary
-key name, (2) the path to a PKCS#8 PEM file, prefixed with “<”, containing an
-RSA or Ed25519 signing key.
+key name, (2) a filesystem data source pointing to a PKCS#8 PEM file, containing
+an RSA or Ed25519 signing key.
 .IP
 When signing a message, if an entry is selected via its key name, then the
 associated signing key is used to produce the cryptographic signature.
@@ -247,13 +284,14 @@ associated signing key is used to produce the cryptographic signature.
 Note that if the data source lookup fails, the current message transaction is
 aborted with a transient SMTP error.
 .TP
-.BR signing_senders " (\fItable\fR)"
-File path to a table listing the available signing senders.
+.BR signing_senders " (\fIdata-source\fR)"
+Data source providing the available signing senders.
+The following describes the filesystem data source (pointing to a table).
 The table should list, in whitespace-separated columns, (1) a sender expression,
 (2) a domain name or an identity expression, (3) a selector, (4) a key name
-listed in the
-.B signing_keys
-table, (5) optionally, the path to a configuration file, prefixed with “<”,
+listed in
+.BR signing_keys ,
+(5) optionally, a filesystem data source pointing to a configuration file
 containing signing parameters.
 .IP
 A sender expression may be (a) a domain name, (b) a domain name prefixed with

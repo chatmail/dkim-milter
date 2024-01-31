@@ -80,9 +80,13 @@ pub async fn find_matching_senders(
     // First, look up matching senders in the signing senders database.
     let matches = signing_senders.find_all(sender).await?;
 
-    let key_ids: Vec<_> = matches.iter().map(|m| m.unresolved_key.clone()).collect();
+    if matches.is_empty() {
+        return Ok(vec![]);
+    }
 
     // Then, resolve (foreign) key IDs in the signing keys database.
+    let key_ids: Vec<_> = matches.iter().map(|m| m.unresolved_key.clone()).collect();
+
     let resolved_keys = signing_keys.resolve_ids(key_ids).await?;
 
     let sender_matches = matches.into_iter()

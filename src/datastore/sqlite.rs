@@ -267,10 +267,8 @@ async fn find_signing_keys(
     table_name: Option<&str>,
     key_ids: Vec<Arc<str>>,
 ) -> Result<Vec<Arc<SigningKey>>, SqlErrorKind> {
-    // Important to shortcut as an empty input leads to invalid SQL below.
-    if key_ids.is_empty() {
-        return Ok(vec![]);
-    }
+    // An empty input would lead to invalid generated SQL below.
+    assert!(!key_ids.is_empty(), "attempted to resolve empty set of keys");
 
     let mut conn = connect(url).await?;
 
@@ -306,9 +304,8 @@ async fn find_signing_keys_conn(
     for key_id in key_ids {
         qargs.push_bind(key_id.as_ref());
     }
-    qargs.push_unseparated(")");
 
-    let q = query.build();
+    let q = query.push(")").build();
 
     let mut map = HashMap::with_capacity(key_ids.len());
 
