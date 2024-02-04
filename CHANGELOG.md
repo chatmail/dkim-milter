@@ -11,22 +11,13 @@ minimum supported Rust version being considered breaking changes.
 
 The minimum supported Rust version is now 1.71.1.
 
-### Added
-
-* New data source (see below) `file:` has been added to support for data being
-  continually read from the filesystem.
-
-* New data source `sqlite:` has been added for SQLite database support.
-
-  This data source is enabled with new Cargo feature `sqlite`.
-
 ### Changed
 
 * The minimum supported Rust version has been raised to 1.71.1.
 
 * Parameters formerly pointing to table-like files now recognise a *data source*
   prefix. This concerns parameters `signing_senders`, `signing_keys`,
-  `connection_overrides`, `recipient_overrides`.
+  `connection_overrides`, and `recipient_overrides`.
 
   The former behaviour can be kept by prefixing the values with `<`: For
   example, `signing_keys = /path/to/file` becomes `signing_keys =
@@ -39,6 +30,16 @@ The minimum supported Rust version is now 1.71.1.
 * Configuration errors detected at runtime now result in a transient SMTP error
   reply being sent to the client. Previously, configuration was always validated
   eagerly and such errors were not possible.
+
+### Added
+
+* New data source `file:` has been added to support for configuration data being
+  continually read from the filesystem. New data source `<`/`slurp:` represents
+  the former default behaviour.
+
+* New data source `sqlite:` has been added for SQLite database support.
+
+  This data source is enabled with new Cargo feature `sqlite`.
 
 ### Fixed
 
