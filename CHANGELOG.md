@@ -40,6 +40,11 @@ The minimum supported Rust version is now 1.71.1.
   reply being sent to the client. Previously, configuration was always validated
   eagerly and such errors were not possible.
 
+### Fixed
+
+* Header names in `oversign_headers` that did not occur in the input message are
+  now properly included in *h=* nevertheless.
+
 ## 0.1.0 (2023-12-27)
 
 Initial release.

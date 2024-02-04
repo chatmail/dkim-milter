@@ -254,10 +254,8 @@ fn select_headers(
                 .collect()
         }
         SignedHeaders::All => {
-            let names_not_to_pick: HashSet<_> = default_unsigned_headers
-                .iter()
-                .map(|n| n.as_ref())
-                .collect();
+            let names_not_to_pick: HashSet<_> =
+                default_unsigned_headers.iter().map(|n| n.as_ref()).collect();
             signer::select_headers(headers, move |name| !names_not_to_pick.contains(name))
                 .cloned()
                 .collect()
@@ -266,21 +264,26 @@ fn select_headers(
 
     match oversign_headers {
         OversignedHeaders::Pick(names) => {
-            let to_oversign: HashSet<_> = names.iter().map(|n| n.as_ref()).collect();
+            let mut to_oversign: HashSet<_> = names.iter().map(|n| n.as_ref()).collect();
 
-            let mut seen: HashSet<&FieldName> = HashSet::new();
-            let oversign: Vec<_> = selection
-                .iter()
-                .filter(|name| to_oversign.contains(name) && seen.insert(name))
+            // First add headers to oversign as they appear in selection …
+            let mut oversign: Vec<_> = selection.iter()
+                .filter(|name| to_oversign.remove(name))
                 .cloned()
                 .collect();
+
+            // … then append remaining (unsigned) headers to oversign.
+            let remaining = names.iter()
+                .map(|n| n.as_ref())
+                .filter(|name| to_oversign.contains(name))
+                .cloned();
+            oversign.extend(remaining);
 
             selection.extend(oversign);
         }
         OversignedHeaders::Signed => {
             let mut seen: HashSet<&FieldName> = HashSet::new();
-            let oversign: Vec<_> = selection
-                .iter()
+            let oversign: Vec<_> = selection.iter()
                 .filter(|name| seen.insert(name))
                 .cloned()
                 .collect();
@@ -290,9 +293,8 @@ fn select_headers(
         OversignedHeaders::Extended => {
             let mut seen: HashSet<&FieldName> = HashSet::new();
 
-            // first oversign all that have been signed already
-            let mut to_oversign: Vec<_> = selection
-                .iter()
+            // First oversign all that have been signed already …
+            let mut oversign: Vec<_> = selection.iter()
                 .filter(|name| seen.insert(name))
                 .cloned()
                 .collect();
@@ -306,24 +308,23 @@ fn select_headers(
                     };
                     tmp.extend(names.iter().map(|n| n.as_ref()));
 
-                    // then oversign all configured names
-                    for n in &tmp {
-                        if !seen.contains(n) {
-                            to_oversign.push((*n).clone());
-                        }
-                    }
+                    // … then oversign all remaining configured names.
+                    let remaining = tmp.into_iter()
+                        .filter(|name| !seen.contains(name))
+                        .cloned();
+                    oversign.extend(remaining);
 
-                    selection.extend(to_oversign);
+                    selection.extend(oversign);
                 }
                 SignedHeaders::All => {
-                    // then oversign all that remain in the default set
-                    for name in default_signed_headers.iter().map(|n| n.as_ref()) {
-                        if !seen.contains(name) {
-                            to_oversign.push((*name).clone());
-                        }
-                    }
+                    // … then oversign all that remain in the default set.
+                    let remaining = default_signed_headers.iter()
+                        .map(|n| n.as_ref())
+                        .filter(|name| !seen.contains(name))
+                        .cloned();
+                    oversign.extend(remaining);
 
-                    selection.extend(to_oversign);
+                    selection.extend(oversign);
                 }
             }
         }
@@ -344,14 +345,14 @@ mod tests {
         let default = header_vec(["From", "To"]);
         let default_unsigned = vec![];
         let sign = SignedHeaders::PickWithDefault(header_vec(["Aa", "Bb", "Ee"]));
-        let oversign = OversignedHeaders::Pick(header_vec(["Bb", "From"]));
+        let oversign = OversignedHeaders::Pick(header_vec(["Bb", "From", "To"]));
 
         let selection = select_headers(&headers, &sign, &oversign, &default, &default_unsigned);
 
         assert!(selection
             .iter()
             .map(|n| n.as_ref())
-            .eq(["aa", "bb", "aa", "from", "bb", "from"]));
+            .eq(["aa", "bb", "aa", "from", "bb", "from", "To"]));
     }
 
     #[test]
