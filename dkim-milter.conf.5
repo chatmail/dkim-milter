@@ -44,8 +44,6 @@ Whitespace before and after key and value is not significant.
 Blank lines and lines whose first non-blank character is
 .B #
 are ignored.
-Configuration files are read eagerly at startup, afterwards configuration exists
-in memory, the file system is not accessed during operation.
 Configuration can be reloaded from disk during operation by sending the signal
 .B SIGHUP
 to the milter process.
