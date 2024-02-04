@@ -455,13 +455,13 @@ fn unwrap_arc<T: Clone>(arc: Arc<T>) -> T {
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
 pub struct ParseLogDestinationError;
 
-impl Error for ParseLogDestinationError {}
-
 impl Display for ParseLogDestinationError {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(f, "failed to parse log destination")
     }
 }
+
+impl Error for ParseLogDestinationError {}
 
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
 pub enum LogDestination {
@@ -485,13 +485,13 @@ impl FromStr for LogDestination {
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
 pub struct ParseLogLevelError;
 
-impl Error for ParseLogLevelError {}
-
 impl Display for ParseLogLevelError {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(f, "failed to parse log level")
     }
 }
+
+impl Error for ParseLogLevelError {}
 
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
 pub enum LogLevel {
@@ -520,13 +520,13 @@ impl FromStr for LogLevel {
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
 pub struct ParseSyslogFacilityError;
 
-impl Error for ParseSyslogFacilityError {}
-
 impl Display for ParseSyslogFacilityError {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(f, "failed to parse syslog facility")
     }
 }
+
+impl Error for ParseSyslogFacilityError {}
 
 /// The syslog facility.
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
@@ -614,13 +614,13 @@ impl From<SyslogFacility> for Facility {
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
 pub struct ParseSocketError;
 
-impl Error for ParseSocketError {}
-
 impl Display for ParseSocketError {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(f, "failed to parse socket")
     }
 }
+
+impl Error for ParseSocketError {}
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub enum Socket {

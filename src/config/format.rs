@@ -45,8 +45,6 @@ pub enum ValidationError {
     IncompatibleSigningConfigOverrides,
 }
 
-impl Error for ValidationError {}
-
 impl Display for ValidationError {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
@@ -57,6 +55,8 @@ impl Display for ValidationError {
     }
 }
 
+impl Error for ValidationError {}
+
 #[derive(Debug)]
 pub struct ParseConfigError {
     pub line: usize,
@@ -66,39 +66,6 @@ pub struct ParseConfigError {
 impl ParseConfigError {
     pub fn new(line: usize, kind: ParseParamError) -> Self {
         Self { line, kind }
-    }
-}
-
-impl Error for ParseConfigError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        use ParseParamError::*;
-
-        match &self.kind {
-            InvalidLine
-            | UnknownKey(_)
-            | DuplicateKey(_)
-            | InvalidValue
-            | InvalidLogDestination(_)
-            | InvalidLogLevel(_)
-            | InvalidSyslogFacility(_)
-            | InvalidSocket(_)
-            | InvalidBoolean(_)
-            | InvalidU32(_)
-            | InvalidNetworkAddress(_)
-            | InvalidFieldName(_)
-            | DuplicateFieldName(_)
-            | SignedHeadersMissingFrom(_)
-            | FromInUnsignedHeaders(_)
-            | InvalidHashAlgorithm(_)
-            | InvalidCanonicalization(_)
-            | InvalidDuration(_)
-            | InvalidRejectFailure(_)
-            | InvalidMode(_) => None,
-            ReadSigningKeys(e)
-            | ReadSigningSenders(e)
-            | ReadConnectionOverrides(e)
-            | ReadRecipientOverrides(e) => Some(e.as_ref()),
-        }
     }
 }
 
@@ -137,6 +104,39 @@ impl Display for ParseConfigError {
     }
 }
 
+impl Error for ParseConfigError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        use ParseParamError::*;
+
+        match &self.kind {
+            InvalidLine
+            | UnknownKey(_)
+            | DuplicateKey(_)
+            | InvalidValue
+            | InvalidLogDestination(_)
+            | InvalidLogLevel(_)
+            | InvalidSyslogFacility(_)
+            | InvalidSocket(_)
+            | InvalidBoolean(_)
+            | InvalidU32(_)
+            | InvalidNetworkAddress(_)
+            | InvalidFieldName(_)
+            | DuplicateFieldName(_)
+            | SignedHeadersMissingFrom(_)
+            | FromInUnsignedHeaders(_)
+            | InvalidHashAlgorithm(_)
+            | InvalidCanonicalization(_)
+            | InvalidDuration(_)
+            | InvalidRejectFailure(_)
+            | InvalidMode(_) => None,
+            ReadSigningKeys(e)
+            | ReadSigningSenders(e)
+            | ReadConnectionOverrides(e)
+            | ReadRecipientOverrides(e) => Some(e.as_ref()),
+        }
+    }
+}
+
 #[derive(Debug)]
 pub enum ParseParamError {
     InvalidLine,
@@ -167,8 +167,6 @@ pub enum ParseParamError {
     ReadConnectionOverrides(Box<dyn Error + Send + Sync>),
     ReadRecipientOverrides(Box<dyn Error + Send + Sync>),
 }
-
-impl Error for ParseParamError {}
 
 impl Display for ParseParamError {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
@@ -203,6 +201,8 @@ impl Display for ParseParamError {
         }
     }
 }
+
+impl Error for ParseParamError {}
 
 pub async fn read_log_config(opts: &CliOptions) -> Result<(LogConfig, String), ConfigError> {
     let config_file = config::get_default_config_file(opts);

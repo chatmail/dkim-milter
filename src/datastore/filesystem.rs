@@ -930,8 +930,7 @@ async fn find_recipient_overrides(
     entries: &[MailAddrOverride],
     recipients: Vec<String>,
 ) -> Result<Vec<Arc<ConfigOverrides>>, TableErrorKind> {
-    let mut recipients_ascii: Vec<Option<Result<String, ()>>> =
-        Vec::with_capacity(recipients.len());
+    let mut recipients_ascii = vec![None; recipients.len()];
 
     let mut matches = vec![];
 
@@ -971,8 +970,7 @@ async fn scan_recipient_overrides_table_content(
     file_content: &str,
     recipients: Vec<String>,
 ) -> Result<Vec<Arc<ConfigOverrides>>, TableFormatError> {
-    let mut recipients_ascii: Vec<Option<Result<String, ()>>> =
-        Vec::with_capacity(recipients.len());
+    let mut recipients_ascii = vec![None; recipients.len()];
 
     let mut matches = vec![];
 

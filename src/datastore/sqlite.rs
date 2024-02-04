@@ -442,8 +442,7 @@ async fn find_recipient_overrides_conn(
 
     let mut rows = sqlx::query(&q).fetch(conn);
 
-    let mut recipients_ascii: Vec<Option<Result<String, ()>>> =
-        Vec::with_capacity(recipients.len());
+    let mut recipients_ascii = vec![None; recipients.len()];
 
     let mut matches = vec![];
 

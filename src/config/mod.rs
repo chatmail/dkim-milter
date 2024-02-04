@@ -84,6 +84,12 @@ pub struct ConfigError {
     pub kind: ConfigErrorKind,
 }
 
+impl Display for ConfigError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "failed to read configuration from {}", self.file.display())
+    }
+}
+
 impl Error for ConfigError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match &self.kind {
@@ -91,12 +97,6 @@ impl Error for ConfigError {
             ConfigErrorKind::Parse(e) => Some(e),
             ConfigErrorKind::Validation(e) => Some(e),
         }
-    }
-}
-
-impl Display for ConfigError {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        write!(f, "failed to read configuration from {}", self.file.display())
     }
 }
 

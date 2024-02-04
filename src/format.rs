@@ -41,13 +41,13 @@ impl Display for MailAddr {
 #[derive(Debug, Eq, PartialEq)]
 pub struct ParseAddrSpecError;
 
-impl Error for ParseAddrSpecError {}
-
 impl Display for ParseAddrSpecError {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(f, "failed to parse mailbox")
     }
 }
+
+impl Error for ParseAddrSpecError {}
 
 // RFC 5322, section 3.6.2
 
