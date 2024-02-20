@@ -50,11 +50,12 @@ use crate::{
     resolver::MockLookupTxt,
 };
 use indymilter::Listener;
-use log::{error, info, LevelFilter, Log, Metadata, Record, SetLoggerError};
+use log::{error, info, warn, LevelFilter, Log, Metadata, Record, SetLoggerError};
 use std::{
     error::Error,
     future::Future,
     io::{self, stderr, ErrorKind, Write},
+    num::NonZeroUsize,
     sync::{Arc, RwLock},
 };
 use tokio::sync::mpsc;
@@ -222,7 +223,7 @@ pub async fn run(
     spawn_reload_task(session_config.clone(), cli_opts, reload);
 
     let callbacks = callbacks::make_callbacks(session_config);
-    let config = Default::default();
+    let config = default_milter_config();
 
     info!("{MILTER_NAME} {VERSION} starting");
 
@@ -246,6 +247,25 @@ fn spawn_reload_task(
             config::reload(&session_config, &opts).await;
         }
     });
+}
+
+fn default_milter_config() -> indymilter::Config {
+    let mut config = indymilter::Config::default();
+
+    // Undocumented configuration parameter: maximum number of connections being
+    // handled at the same time.
+    if let Some(n) = option_env!("DKIM_MILTER_MAX_CONNECTIONS") {
+        match n.parse::<NonZeroUsize>() {
+            Ok(n) => {
+                config.max_connections = n.into();
+            }
+            Err(_) => {
+                warn!("ignoring invalid environment variable DKIM_MILTER_MAX_CONNECTIONS");
+            }
+        }
+    }
+
+    config
 }
 
 /// A minimal log implementation that uses `writeln!` for logging.
