@@ -16,7 +16,7 @@
 
 use dkim_milter::{CliOptions, Config, Socket, MILTER_NAME, VERSION};
 use futures_util::stream::StreamExt;
-use indymilter::Listener;
+use indymilter::EitherListener;
 use log::error;
 use signal_hook::consts::{SIGHUP, SIGINT, SIGTERM};
 use signal_hook_tokio::{Handle, Signals};
@@ -78,7 +78,7 @@ async fn main() {
                 }
             };
 
-            Listener::Tcp(listener)
+            EitherListener::Tcp(listener)
         }
         Socket::Unix(path) => {
             // Before creating the socket file, try removing any existing socket
@@ -99,7 +99,7 @@ async fn main() {
             addr = listener.local_addr().unwrap();
             socket_path = addr.as_pathname();
 
-            Listener::Unix(listener)
+            EitherListener::Unix(listener)
         }
     };
 

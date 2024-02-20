@@ -49,7 +49,7 @@ use crate::{
     config::{LogConfig, SessionConfig},
     resolver::MockLookupTxt,
 };
-use indymilter::IntoListener;
+use indymilter::Listener;
 use log::{error, info, LevelFilter, Log, Metadata, Record, SetLoggerError};
 use std::{
     error::Error,
@@ -206,7 +206,7 @@ fn configure_logging(config: &LogConfig) -> Result<(), Box<dyn Error + 'static>>
 }
 
 pub async fn run(
-    listener: impl IntoListener,
+    listener: impl Listener,
     config: Config,
     reload: mpsc::Receiver<()>,
     shutdown: impl Future,

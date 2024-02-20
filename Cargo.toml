@@ -15,7 +15,7 @@ byte-strings = "0.3.1"
 domain = { version = "0.9.3", features = ["resolv"] }
 futures-util = "0.3.30"
 idna = "0.4.0"
-indymilter = "0.2.0"
+indymilter = "0.3.0-alpha.2"
 ipnet = "2.9.0"
 log = "0.4.20"
 once_cell = "1.19.0"
@@ -28,7 +28,7 @@ tokio = { version = "1.35.1", features = ["fs", "macros", "net", "rt", "rt-multi
 viadkim = "0.1.0"
 
 [dev-dependencies]
-indymilter-test = { version = "0.1.0", features = ["regex"] }
+indymilter-test = { version = "0.2.0-alpha.1", features = ["regex"] }
 
 [features]
 # Reverts cryptographic algorithm and key usage to before RFC 8301.

@@ -662,12 +662,12 @@ dependencies = [
 
 [[package]]
 name = "indymilter"
-version = "0.2.0"
+version = "0.3.0-alpha.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "23b2d41c863440ee78353a6607ff5bac3f5aa24c7c2ba735464e82a10fd4ec9e"
+checksum = "e6c3392d85285e35e57b4d22905f5783e940d37738631212fe09daa05ed4f2ed"
 dependencies = [
  "async-trait",
- "bitflags 1.3.2",
+ "bitflags 2.4.2",
  "bytes",
  "tokio",
  "tracing",
@@ -675,9 +675,9 @@ dependencies = [
 
 [[package]]
 name = "indymilter-test"
-version = "0.1.0"
+version = "0.2.0-alpha.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "25dfd6f445a196eef4f10f35b52c261dc50a714d7c76075e4a7f29bd6f8ebdda"
+checksum = "3b064f2f005991633bf07ff72ae176cfe34da4db7e65c231819da4511d653c91"
 dependencies = [
  "bytes",
  "indymilter",
