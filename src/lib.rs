@@ -52,6 +52,7 @@ use crate::{
 use indymilter::Listener;
 use log::{error, info, warn, LevelFilter, Log, Metadata, Record, SetLoggerError};
 use std::{
+    env,
     error::Error,
     future::Future,
     io::{self, stderr, ErrorKind, Write},
@@ -254,7 +255,7 @@ fn default_milter_config() -> indymilter::Config {
 
     // Undocumented configuration parameter: maximum number of connections being
     // handled at the same time.
-    if let Some(n) = option_env!("DKIM_MILTER_MAX_CONNECTIONS") {
+    if let Ok(n) = env::var("DKIM_MILTER_MAX_CONNECTIONS") {
         match n.parse::<NonZeroUsize>() {
             Ok(n) => {
                 config.max_connections = n.into();
