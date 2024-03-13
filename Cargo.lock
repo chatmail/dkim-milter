@@ -662,9 +662,9 @@ dependencies = [
 
 [[package]]
 name = "indymilter"
-version = "0.3.0-alpha.2"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e6c3392d85285e35e57b4d22905f5783e940d37738631212fe09daa05ed4f2ed"
+checksum = "d59de8ca0453c550ba5960c3e646c197f7bbbca553212ab89bf7eeeb0298e40f"
 dependencies = [
  "async-trait",
  "bitflags 2.4.2",
@@ -675,9 +675,9 @@ dependencies = [
 
 [[package]]
 name = "indymilter-test"
-version = "0.2.0-alpha.1"
+version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3b064f2f005991633bf07ff72ae176cfe34da4db7e65c231819da4511d653c91"
+checksum = "2e4407895353fb7657299861d959e86376996086076efbd781e67bf85f3a7fca"
 dependencies = [
  "bytes",
  "indymilter",
@@ -799,9 +799,9 @@ dependencies = [
 
 [[package]]
 name = "mio"
-version = "0.8.10"
+version = "0.8.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8f3d0b296e374a4e6f3c7b0a1f5a51d748a0d34c85e7dc48fc3fa9a87657fe09"
+checksum = "a4a650543ca06a924e8b371db273b2756685faae30f8487da1b56505a8f78b0c"
 dependencies = [
  "libc",
  "wasi",
