@@ -17,12 +17,12 @@
 use crate::config::{
     format::ParseParamError,
     model::{
-        Expiration, OversignedHeaders, RejectFailure, RejectFailures, SignedFieldName,
+        OversignedHeaders, RejectFailure, RejectFailures, SignedFieldName,
         SignedFieldNameWithQualifier, SignedHeaders, TrustedNetworks,
     },
 };
 use std::{collections::HashSet, net::IpAddr, str::FromStr, time::Duration};
-use viadkim::crypto::HashAlgorithm;
+use viadkim::{crypto::HashAlgorithm, signer::Expiration};
 
 pub fn parse_boolean(s: &str) -> Result<bool, ParseParamError> {
     match s {

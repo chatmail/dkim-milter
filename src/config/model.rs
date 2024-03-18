@@ -29,7 +29,7 @@ use viadkim::{
     crypto::HashAlgorithm,
     header::{FieldName, HeaderFieldError},
     signature::{Canonicalization, CanonicalizationAlgorithm, DomainName},
-    signer,
+    signer::{self, Expiration},
 };
 
 // Provide FromStr impl only for types that have an ‘atomic’, ‘natural’, obvious
@@ -749,12 +749,6 @@ pub enum OversignedHeaders {
     Pick(Vec<SignedFieldName>),
     Signed,
     Extended,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub enum Expiration {
-    Never,
-    After(Duration),  // non-zero
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]

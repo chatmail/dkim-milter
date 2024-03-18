@@ -17,8 +17,8 @@
 use crate::{
     config::{
         model::{
-            DomainExpr, Expiration, IdentityDomainExpr, LocalPartExpr, OversignedHeaders,
-            PartialSigningConfig, SignedFieldName, SignedHeaders, SigningConfig,
+            DomainExpr, IdentityDomainExpr, LocalPartExpr, OversignedHeaders, PartialSigningConfig,
+            SignedFieldName, SignedHeaders, SigningConfig,
         },
         Config,
     },
@@ -205,14 +205,8 @@ fn make_sign_request(
     let mut request = SignRequest::new(domain, selector, alg, signing_key);
 
     request.identity = identity;
-
     request.canonicalization = config.canonicalization;
-
-    request.valid_duration = match config.expiration {
-        Expiration::Never => None,
-        Expiration::After(duration) => Some(duration),
-    };
-
+    request.expiration = config.expiration;
     request.copy_headers = config.copy_headers;
 
     if config.limit_body_length {
