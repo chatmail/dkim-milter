@@ -493,7 +493,7 @@ fn is_ctext_loose(c: &u8) -> bool {
 }
 
 pub fn is_dot_atom(s: &str) -> bool {
-    matches!(strip_dot_atom(s), Some(s) if s.is_empty())
+    strip_dot_atom(s) == Some("")
 }
 
 // dot-atom = [CFWS] dot-atom-text [CFWS]
@@ -524,7 +524,7 @@ fn is_atext(c: char) -> bool {
 }
 
 pub fn is_quoted_string(s: &str) -> bool {
-    matches!(strip_quoted_string(s), Some(s) if s.is_empty())
+    strip_quoted_string(s) == Some("")
 }
 
 // quoted-string = [CFWS] DQUOTE *([FWS] qcontent) [FWS] DQUOTE [CFWS]
@@ -666,7 +666,7 @@ pub fn strip_mime_value(input: &[u8]) -> Option<&[u8]> {
 }
 
 fn is_token(s: &str) -> bool {
-    matches!(strip_token(s), Some(s) if s.is_empty())
+    strip_token(s) == Some("")
 }
 
 // token := 1*<any (US-ASCII) CHAR except SPACE, CTLs, or tspecials>

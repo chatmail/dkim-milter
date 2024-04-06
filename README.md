@@ -289,6 +289,8 @@ signing_keys = sqlite://mail-config.db#dkim_signing_keys
 
 The database schema is documented elsewhere in this project.
 
+In the future, more data sources (SQL, LDAP, …) could be added.
+
 ## Key setup
 
 Currently no utilities are provided for key management. However, we can use the
