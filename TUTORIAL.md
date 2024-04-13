@@ -11,12 +11,11 @@ adequate for most single-domain installations.
 Before stepping through this tutorial make sure you have the following ready:
 
 * A working milter-aware MTA (mail server). This tutorial uses Postfix.
-* The `openssl` command-line utility.
-* The `cargo` Rust tool for building/installing DKIM Milter.
+* The `cargo` Rust tool for building/installing DKIM Milter (and dkimdo).
 * Your domain, that is the domain that you want to do DKIM signing for. We will
   use *example.com*.
 
-## Install DKIM Milter
+## Install DKIM Milter and other prerequisites
 
 First, ensure DKIM Milter is installed. The Cargo command `cargo install
 --locked dkim-milter` is the recommended installation method. In any case, make
@@ -24,8 +23,12 @@ sure the `dkim-milter` program is on the search path and can be executed.
 
 The command `dkim-milter -V` should print version information.
 
+Second, ensure dkimdo is installed in the same way you installed DKIM Milter:
+`cargo install --locked dkimdo`. The dkimdo program will help with key setup
+later.
+
 Towards the end of the tutorial we will set up a system service that runs the
-`dkim-milter` command. But before that we need to prepare a working
+`dkim-milter` program. But before that we need to prepare a working
 configuration.
 
 The default configuration file belongs at /etc/dkim-milter/dkim-milter.conf.
@@ -43,18 +46,22 @@ touch /etc/dkim-milter/dkim-milter.conf
 DKIM signatures rely on public key cryptography, which is a scheme that uses a
 key pair with a private and a public component. In order to perform signing
 later, you first need to generate a private key. We will use an RSA key. You can
-generate an RSA signing key using the `openssl` utility from the OpenSSL
-project.
+generate an RSA signing key using the `dkimdo` utility installed earlier.
 
 First create a keys directory for our signing key in /etc/dkim-milter, and then
 run the command that generates an RSA signing key there:
 
 ```
 mkdir /etc/dkim-milter/keys
-openssl genpkey -algorithm RSA -out /etc/dkim-milter/keys/my_rsa_key.pem
+dkimdo genkey --out-file /etc/dkim-milter/keys/my_rsa_key.pem rsa
 ```
 
-This is your private, secret key. Protect it well and don’t publish it anywhere!
+This file now contains your private, secret key. Protect it well and don’t
+publish it anywhere!
+
+You will have noticed that `dkimdo genkey` also printed as a secondary output a
+*DKIM public key record* starting with `v=DKIM1 ...`. You can make a note of it
+now, or recreate it later using `dkimdo keyinfo`; read on.
 
 ## Pick a domain and selector
 
@@ -85,7 +92,7 @@ signing_senders = </etc/dkim-milter/signing-senders
 /etc/dkim-milter/signing-keys should list the named keys that we want to use for
 signing. We generated an RSA signing key earlier and can now add it in this
 file. The first column is an arbitrary name, the second is the file path to the
-PEM file, prefixed with `<`. Lines starting with `#` are treated as comments and
+key file, prefixed with `<`. Lines starting with `#` are treated as comments and
 are ignored:
 
 ```
@@ -97,8 +104,8 @@ my_rsa_key    </etc/dkim-milter/keys/my_rsa_key.pem
 sign. The first column is the sender expression: This is an expression that will
 be matched against the message author in the *From* header. If it matches, then
 the message will be signed using the parameters in the remaining columns. DKIM
-Milter will not sign anyone’s mail: The signing senders table is only consulted
-for authenticated connections or connections from a trusted network.
+Milter will not sign just anyone’s mail: The signing senders table is only
+consulted for authenticated connections or connections from a trusted network.
 
 Add the following in this file:
 
@@ -123,26 +130,23 @@ entry, and will then generate and insert a signature with tags `d=example.com`,
 
 Now that we have signing set up, we need to make sure others can verify our
 signatures. With public key cryptography, this requires the public key to be
-published. We need to publish a DKIM public key record (that is, a TXT record)
+published. That is, we need to publish a DKIM public key record (a TXT record)
 in DNS at `<selector>._domainkey.<domain>`. In our case, at
 `rsa.2023._domainkey.example.com`.
 
-The minimal format of this record is the following, where `<key_data>` is the
-public key data:
+You have already seen the public key record printed to the console when you
+generated the signing key.
+
+Now either retrieve your note with the public key record on it, or recreate it
+using the `dkimdo keyinfo` command. This command extracts the public key data
+from our private signing key and wraps it in the right format:
 
 ```
-v=DKIM1; k=rsa; p=<key_data>
+dkimdo keyinfo /etc/dkim-milter/keys/my_rsa_key.pem
 ```
 
-We can extract the public key data from our private signing key using `openssl`:
-
-```
-openssl pkey -in /etc/dkim-milter/keys/my_rsa_key.pem -pubout -outform DER | openssl base64 -A
-```
-
-This produces a long Base64 string that might look something like
-`MIIBIjAN...YQIDAQAB` (without the ellipsis). Paste this into your record, be
-sure to copy it entirely and not alter it in any way:
+The public key record is the text that looks something like this (without the
+ellipsis):
 
 ```
 v=DKIM1; k=rsa; p=MIIBIjAN...YQIDAQAB

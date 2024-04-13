@@ -293,54 +293,38 @@ In the future, more data sources (SQL, LDAP, …) could be added.
 
 ## Key setup
 
-Currently no utilities are provided for key management. However, we can use the
-`openssl` utility from OpenSSL 3 to provide keys manually. The following
-tutorial uses exclusively that tool to do all key setup.
+Strictly speaking, key management is out of scope for DKIM Milter. There is,
+however, a companion tool [dkimdo] that you can use to do key setup manually.
+What follows is a brief introduction.
 
-For signing, DKIM Milter reads signing keys (private keys) from files in PKCS#8
-PEM format. This format can be recognised by its beginning line
+For signing, DKIM Milter reads *signing keys* (private keys) from files in
+PKCS#8 PEM format. This format can be recognised by its beginning line
 `-----BEGIN PRIVATE KEY-----`.
 
-First, generate an RSA 2048-bit or an Ed25519 private key file `private.pem`
-with the following commands, respectively:
+Generate an RSA 2048-bit or an Ed25519 private key file `private.pem` with the
+following commands, respectively:
 
 ```
-openssl genpkey -algorithm RSA -out private.pem
-openssl genpkey -algorithm ED25519 -out private.pem
+dkimdo genkey --out-file private.pem rsa
+dkimdo genkey --out-file private.pem ed25519
 ```
 
-The corresponding public key for each signing key must be published in DNS in a
-special TXT record at domain `<selector>._domainkey.<domain>`.
-
-The minimal format for the TXT record is as follows, where `<key_type>` must be
-either `rsa` or `ed25519` for the respective key type, and `<key_data>` must be
-the properly encoded public key data as explained in the following paragraph:
+These commands create a signing key file for either the RSA or Ed25519 key type.
+Each command also prints out the corresponding *DKIM public key record* to
+standard error. For example, for RSA the printed record looks something like the
+following:
 
 ```
-v=DKIM1; k=<key_type>; p=<key_data>
+v=DKIM1; k=rsa; p=MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCA...
 ```
 
-If the key to publish in DNS is of type RSA, use the following command: Extract
-the public key from the RSA private key as the final Base64-encoded `<key_data>`
-value:
+The public key record for each signing key must be published in DNS as a TXT
+record at domain `<selector>._domainkey.<domain>`. How to do so is specific to
+the DNS software and/or DNS provider.
 
-```
-openssl pkey -in private.pem -pubout -outform DER |
-  openssl base64 -A
-```
-
-If the key to publish in DNS is of type Ed25519, use the following command:
-First extract the public key from the Ed25519 private key, and then extract and
-produce the final Base64-encoded `<key_data>` value:
-
-```
-openssl pkey -in private.pem -pubout |
-  openssl asn1parse -offset 12 -noout -out /dev/stdout |
-  openssl base64 -A
-```
-
-For example, here is a key record produced in this manner looked up in DNS with
-the `dig` utility. Notice selector `ed25519.2022` and domain `gluet.ch`:
+As an example, here is a public key record produced in this manner looked up in
+DNS with the `dig` utility. Notice selector `ed25519.2022` and domain
+`gluet.ch`:
 
 ```
 dig +short ed25519.2022._domainkey.gluet.ch txt
@@ -350,12 +334,17 @@ dig +short ed25519.2022._domainkey.gluet.ch txt
 "v=DKIM1; k=ed25519; p=7mOZGVMZF55bgonwHLfOzwlU+UAat5//VJEugD3fyz0="
 ```
 
-(The Ed25519 key record above fits in a single text string. The much larger RSA
-key record is usually spread over several text strings. How such large TXT
-records need to be set up depends on DNS software and/or DNS provider.)
+(The Ed25519 public key record above fits in a single text string. The much
+larger RSA record is usually spread over several text strings. How such large
+TXT records need to be set up depends on DNS software and/or DNS provider.)
 
-Alternatively, it is planned that the command-line tool [dkimdo] will provide
-functionality for conveniently generating the above key material.
+A public key record can also be queried using `dkimdo query`. The public key
+record can also be generated from an existing signing key using `dkimdo
+keyinfo`.
+
+Note that dkimdo output is not at all bespoke or magical, you can just as well
+produce the key material using the standard `openssl` utility from the OpenSSL 3
+project.
 
 [dkimdo]: https://crates.io/crates/dkimdo
 
