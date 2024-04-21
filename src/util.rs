@@ -14,7 +14,9 @@
 // You should have received a copy of the GNU General Public License along with
 // this program. If not, see <https://www.gnu.org/licenses/>.
 
-use std::{future::Future, pin::Pin};
+use std::{error::Error, future::Future, pin::Pin};
+
+pub type BoxError = Box<dyn Error + Send + Sync>;
 
 pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 

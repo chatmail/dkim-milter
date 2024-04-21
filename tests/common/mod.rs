@@ -38,7 +38,7 @@ pub fn default_cli_options() -> CliOptions {
 // file is installed only once.
 static INIT_LOG: Once = Once::new();
 
-pub async fn read_config(opts: CliOptions) -> Result<Config, Box<dyn Error>> {
+pub async fn read_config(opts: CliOptions) -> Result<Config, Box<dyn Error + Send + Sync>> {
     let config = StubConfig::read(opts).await?;
 
     INIT_LOG.call_once(|| config.install_static_logger().unwrap());
@@ -51,7 +51,7 @@ pub async fn read_config(opts: CliOptions) -> Result<Config, Box<dyn Error>> {
 pub async fn read_config_with_lookup(
     opts: CliOptions,
     lookup: impl Fn(&str) -> LookupFuture + Send + Sync + 'static,
-) -> Result<Config, Box<dyn Error>> {
+) -> Result<Config, Box<dyn Error + Send + Sync>> {
     let config = StubConfig::read(opts).await?;
 
     INIT_LOG.call_once(|| config.install_static_logger().unwrap());
@@ -61,7 +61,9 @@ pub async fn read_config_with_lookup(
     Ok(config)
 }
 
-pub async fn read_config_with_dummy_lookup(opts: CliOptions) -> Result<Config, Box<dyn Error>> {
+pub async fn read_config_with_dummy_lookup(
+    opts: CliOptions,
+) -> Result<Config, Box<dyn Error + Send + Sync>> {
     read_config_with_lookup(opts, |_| {
         Box::pin(async { Err(ErrorKind::NotFound.into()) })
     })

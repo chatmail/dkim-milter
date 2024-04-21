@@ -24,7 +24,7 @@ use crate::{
     datastore::{self, SenderMatch},
     format::{self, AddrSpec, MailAddr},
     sign::Signer,
-    util,
+    util::{self, BoxError},
     verify::Verifier,
 };
 use indymilter::{ActionError, ContextActions, SetErrorReply, Status};
@@ -145,7 +145,7 @@ impl Session {
         id: &str,
         name: Cow<'_, str>,
         value: Vec<u8>,
-    ) -> Result<Status, Box<dyn Error>> {
+    ) -> Result<Status, BoxError> {
         let message = match self.message.as_mut() {
             Some(message) => message,
             None => return Err("message context not available".into()),
@@ -245,7 +245,7 @@ impl Session {
     pub async fn init_processing(
         &mut self,
         id: &str,
-    ) -> Result<Status, Box<dyn Error + Send + Sync>> {
+    ) -> Result<Status, BoxError> {
         let message = match self.message.as_mut() {
             Some(message) => message,
             None => return Err("message context not available".into()),
@@ -306,7 +306,7 @@ impl Session {
                     Ok(matches) => matches,
                     Err(e) => {
                         // Log at error level: Failure to provide service due to
-                        // configuration lookup error (ie, a user error!).
+                        // configuration lookup error (usually a user error!).
                         config::log_errors(Some(id), e.as_ref());
                         error!("{id}: failed to look up signing senders or keys, aborting message transaction");
                         return Ok(Status::Tempfail);
@@ -361,7 +361,7 @@ impl Session {
         headers: HeaderFields,
         sender: MailAddr,
         matches: Vec<SenderMatch>,
-    ) -> Result<Status, Box<dyn Error + Send + Sync>> {
+    ) -> Result<Status, BoxError> {
         debug!("{id}: entered signing mode");
 
         let config = &self.session_config.config;
@@ -388,15 +388,22 @@ impl Session {
             }
         };
 
-        let signer = Signer::init(
-            id,
+        let signer = match Signer::init(
             config,
             headers,
-            &sender,
+            sender,
             matches,
             &connection_overrides.signing_config,
             &recipient_overrides.signing_config,
-        )?;
+        ) {
+            Ok(s) => s,
+            Err(e) => {
+                // Failure to construct the signer is due to a configuration
+                // mistake. (The error here is flat, not nested like above.)
+                error!("{id}: failed to initiate signing process: {e}");
+                return Ok(Status::Tempfail);
+            }
+        };
 
         message.mode = Mode::Signing(signer);
 
@@ -449,17 +456,17 @@ impl Session {
         Status::Continue
     }
 
-    pub fn process_body_chunk(&mut self, chunk: &[u8]) -> Result<Status, Box<dyn Error>> {
+    pub fn process_body_chunk(&mut self, chunk: &[u8]) -> Result<Status, BoxError> {
         let message = match self.message.as_mut() {
             Some(message) => message,
             None => return Err("message context not available".into()),
         };
 
-        match &mut message.mode {
-            Mode::Inactive => Ok(Status::Skip),
+        Ok(match &mut message.mode {
+            Mode::Inactive => Status::Skip,
             Mode::Signing(signer) => signer.process_body_chunk(chunk),
             Mode::Verifying(verifier) => verifier.process_body_chunk(chunk),
-        }
+        })
     }
 
     pub async fn finish_message(
@@ -467,7 +474,7 @@ impl Session {
         id: &str,
         reply: &mut impl SetErrorReply,
         actions: &impl ContextActions,
-    ) -> Result<Status, Box<dyn Error>> {
+    ) -> Result<Status, BoxError> {
         let message = match self.message.take() {
             Some(message) => message,
             None => return Err("message context not available".into()),
@@ -682,6 +689,11 @@ fn extract_sender(
     sender_address: Option<Result<AddrSpec, SenderAddrError>>,
     from_addresses: Option<Result<Vec<AddrSpec>, SenderAddrError>>,
 ) -> Option<MailAddr> {
+    // Shortcut to disallow determining a sender without *From* being present:
+    // While it would be possible to extract the originator from *Sender*, a
+    // message without any *From* header is not useful for DKIM signing.
+    let from_addresses = from_addresses?;
+
     match sender_address {
         Some(Ok(addr)) => {
             match addr.into_mail_addr() {
@@ -703,7 +715,7 @@ fn extract_sender(
     }
 
     match from_addresses {
-        Some(Ok(from_addresses)) => {
+        Ok(from_addresses) => {
             assert!(!from_addresses.is_empty());
             let from_addresses: Vec<_> = from_addresses.into_iter()
                 .filter_map(|addr| addr.into_mail_addr())
@@ -722,11 +734,8 @@ fn extract_sender(
                 }
             }
         }
-        Some(Err(_)) => {
+        Err(_) => {
             debug!("{id}: originator address in From header not usable");
-        }
-        None => {
-            debug!("{id}: no originator address in From or Sender header");
         }
     }
 
@@ -767,7 +776,7 @@ pub fn authserv_id<'a>(config: &'a Config, hostname: &'a str) -> &'a str {
 async fn get_connection_overrides(
     ip: Option<IpAddr>,
     config: &Config,
-) -> Result<ConfigOverrides, Box<dyn Error + Send + Sync>> {
+) -> Result<ConfigOverrides, BoxError> {
     let mut result = ConfigOverrides::default();
 
     if let Some(connection_overrides) = &config.connection_overrides {
@@ -788,7 +797,7 @@ async fn get_connection_overrides(
 async fn get_recipient_overrides(
     recipients: Vec<String>,
     config: &Config,
-) -> Result<ConfigOverrides, Box<dyn Error + Send + Sync>> {
+) -> Result<ConfigOverrides, BoxError> {
     let mut result = ConfigOverrides::default();
 
     if let Some(recipient_overrides) = &config.recipient_overrides {

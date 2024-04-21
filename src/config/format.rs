@@ -26,6 +26,7 @@ use crate::{
         params, CliOptions, Config, ConfigError, ConfigErrorKind, LogConfig,
     },
     datastore,
+    util::BoxError,
 };
 use std::{
     collections::HashSet,
@@ -162,10 +163,10 @@ pub enum ParseParamError {
     InvalidMode(String),
     InvalidRejectFailure(String),
 
-    ReadSigningKeys(Box<dyn Error + Send + Sync>),
-    ReadSigningSenders(Box<dyn Error + Send + Sync>),
-    ReadConnectionOverrides(Box<dyn Error + Send + Sync>),
-    ReadRecipientOverrides(Box<dyn Error + Send + Sync>),
+    ReadSigningKeys(BoxError),
+    ReadSigningSenders(BoxError),
+    ReadConnectionOverrides(BoxError),
+    ReadRecipientOverrides(BoxError),
 }
 
 impl Display for ParseParamError {

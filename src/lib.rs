@@ -48,12 +48,12 @@ pub use crate::{
 use crate::{
     config::{LogConfig, SessionConfig},
     resolver::MockLookupTxt,
+    util::BoxError,
 };
 use indymilter::Listener;
 use log::{error, info, warn, LevelFilter, Log, Metadata, Record, SetLoggerError};
 use std::{
     env,
-    error::Error,
     future::Future,
     io::{self, stderr, ErrorKind, Write},
     num::NonZeroUsize,
@@ -75,7 +75,7 @@ pub struct StubConfig {
 }
 
 impl StubConfig {
-    pub async fn read(opts: CliOptions) -> Result<Self, Box<dyn Error + 'static>> {
+    pub async fn read(opts: CliOptions) -> Result<Self, BoxError> {
         let (log_config, config_file_content) = match LogConfig::read(&opts).await {
             Ok(config) => config,
             Err(e) => return Err(Box::new(e)),
@@ -88,12 +88,12 @@ impl StubConfig {
         })
     }
 
-    pub fn install_static_logger(&self) -> Result<(), Box<dyn Error + 'static>> {
+    pub fn install_static_logger(&self) -> Result<(), BoxError> {
         configure_logging(&self.log_config)?;
         Ok(())
     }
 
-    pub async fn read_fully(self) -> Result<Config, Box<dyn Error + 'static>> {
+    pub async fn read_fully(self) -> Result<Config, BoxError> {
         let StubConfig { opts, log_config, config_file_content } = self;
         Config::read_fully(opts, log_config, &config_file_content, None).await
     }
@@ -101,7 +101,7 @@ impl StubConfig {
     pub async fn read_fully_with_lookup(
         self,
         lookup: impl Fn(&str) -> LookupFuture + Send + Sync + 'static,
-    ) -> Result<Config, Box<dyn Error + 'static>> {
+    ) -> Result<Config, BoxError> {
         let StubConfig { opts, log_config, config_file_content } = self;
         let lookup = Arc::new(lookup);
         Config::read_fully(opts, log_config, &config_file_content, Some(lookup)).await
@@ -117,14 +117,14 @@ pub struct Config {
 // Note: `Config::read` is stateful, as it installs a global logger on first
 // use; this logger is active for the rest of the program.
 impl Config {
-    pub async fn read(opts: CliOptions) -> Result<Self, Box<dyn Error + 'static>> {
+    pub async fn read(opts: CliOptions) -> Result<Self, BoxError> {
         Self::read_internal(opts, None).await
     }
 
     pub async fn read_with_lookup(
         opts: CliOptions,
         lookup: impl Fn(&str) -> LookupFuture + Send + Sync + 'static,
-    ) -> Result<Self, Box<dyn Error + 'static>> {
+    ) -> Result<Self, BoxError> {
         let lookup = Arc::new(lookup);
         Self::read_internal(opts, Some(lookup)).await
     }
@@ -132,7 +132,7 @@ impl Config {
     async fn read_internal(
         opts: CliOptions,
         mock_resolver: Option<Arc<dyn Fn(&str) -> LookupFuture + Send + Sync>>,
-    ) -> Result<Self, Box<dyn Error + 'static>> {
+    ) -> Result<Self, BoxError> {
         let config = StubConfig::read(opts).await?;
 
         config.install_static_logger()?;
@@ -149,7 +149,7 @@ impl Config {
         log_config: LogConfig,
         config_file_content: &str,
         mock_resolver: Option<Arc<dyn Fn(&str) -> LookupFuture + Send + Sync>>,
-    ) -> Result<Self, Box<dyn Error + 'static>> {
+    ) -> Result<Self, BoxError> {
         let config = match config::Config::read_with_log_config(
             &opts,
             log_config,
@@ -177,7 +177,7 @@ impl Config {
     }
 }
 
-fn configure_logging(config: &LogConfig) -> Result<(), Box<dyn Error + 'static>> {
+fn configure_logging(config: &LogConfig) -> Result<(), BoxError> {
     let level = match config.log_level {
         LogLevel::Error => LevelFilter::Error,
         LogLevel::Warn => LevelFilter::Warn,

@@ -48,6 +48,27 @@ impl ConfigOverrides {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub enum SigningConfigError {
+    OversignedNotInSigned,
+    BothOversignedAndExcluded,
+}
+
+impl Display for SigningConfigError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::OversignedNotInSigned => {
+                write!(f, "header to oversign not included in signed headers")
+            }
+            Self::BothOversignedAndExcluded => {
+                write!(f, "header to oversign expressly excluded from signing")
+            }
+        }
+    }
+}
+
+impl Error for SigningConfigError {}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct SigningConfig {
     pub ascii_only_signatures: bool,
@@ -64,42 +85,10 @@ pub struct SigningConfig {
 }
 
 impl SigningConfig {
-    fn check_invariants(&self) -> Result<(), Box<dyn Error>> {
-        match (&self.oversign_headers, &self.sign_headers) {
-            (
-                OversignedHeaders::Pick(oversigned_names),
-                s @ (SignedHeaders::Pick(names) | SignedHeaders::PickWithDefault(names)),
-            ) => {
-                let mut all_signed: HashSet<_> = names.iter().collect();
-                if matches!(s, SignedHeaders::PickWithDefault(_)) {
-                    all_signed.extend(self.default_signed_headers.iter());
-                }
-                for h in oversigned_names {
-                    if !all_signed.contains(h) {
-                        return Err("cannot oversign header not included for signing".into());
-                    }
-                }
-            }
-            (OversignedHeaders::Pick(oversigned_names), SignedHeaders::All) => {
-                for h in oversigned_names {
-                    if self.default_unsigned_headers.contains(h) {
-                        return Err("cannot oversign header expressly excluded from signing".into());
-                    }
-                }
-            }
-            (OversignedHeaders::Extended, SignedHeaders::All) => {
-                for h in &self.default_signed_headers {
-                    if self.default_unsigned_headers.contains(h) {
-                        return Err("cannot oversign header expressly excluded from signing".into());
-                    }
-                }
-            }
-            _ => {}
-        }
-        Ok(())
-    }
-
-    pub fn merged_with(&self, overrides: &PartialSigningConfig) -> Result<Self, Box<dyn Error>> {
+    pub fn merged_with(
+        &self,
+        overrides: &PartialSigningConfig,
+    ) -> Result<Self, SigningConfigError> {
         let mut config = self.clone();
 
         if let Some(value) = overrides.ascii_only_signatures {
@@ -139,6 +128,41 @@ impl SigningConfig {
         config.check_invariants()?;
 
         Ok(config)
+    }
+
+    fn check_invariants(&self) -> Result<(), SigningConfigError> {
+        match (&self.oversign_headers, &self.sign_headers) {
+            (
+                OversignedHeaders::Pick(oversigned_names),
+                s @ (SignedHeaders::Pick(names) | SignedHeaders::PickWithDefault(names)),
+            ) => {
+                let mut all_signed: HashSet<_> = names.iter().collect();
+                if matches!(s, SignedHeaders::PickWithDefault(_)) {
+                    all_signed.extend(self.default_signed_headers.iter());
+                }
+                for h in oversigned_names {
+                    if !all_signed.contains(h) {
+                        return Err(SigningConfigError::OversignedNotInSigned);
+                    }
+                }
+            }
+            (OversignedHeaders::Pick(oversigned_names), SignedHeaders::All) => {
+                for h in oversigned_names {
+                    if self.default_unsigned_headers.contains(h) {
+                        return Err(SigningConfigError::BothOversignedAndExcluded);
+                    }
+                }
+            }
+            (OversignedHeaders::Extended, SignedHeaders::All) => {
+                for h in &self.default_signed_headers {
+                    if self.default_unsigned_headers.contains(h) {
+                        return Err(SigningConfigError::BothOversignedAndExcluded);
+                    }
+                }
+            }
+            _ => {}
+        }
+        Ok(())
     }
 }
 
@@ -241,7 +265,7 @@ impl PartialSigningConfig {
         }
     }
 
-    pub fn into_signing_config(self) -> Result<SigningConfig, Box<dyn Error>> {
+    pub fn into_signing_config(self) -> Result<SigningConfig, SigningConfigError> {
         let mut config = SigningConfig::default();
 
         if let Some(value) = self.ascii_only_signatures {

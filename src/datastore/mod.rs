@@ -24,12 +24,11 @@ use crate::{
         PartialSigningConfig,
     },
     format::MailAddr,
-    util::BoxFuture,
+    util::{BoxError, BoxFuture},
 };
 use ipnet::IpNet;
 use regex::Regex;
 use std::{
-    error::Error,
     fmt,
     net::{AddrParseError, IpAddr},
     str::FromStr,
@@ -71,7 +70,7 @@ pub async fn find_matching_senders(
     signing_senders: &dyn SigningSendersDb,
     signing_keys: &dyn SigningKeysDb,
     sender: &MailAddr,
-) -> Result<Vec<SenderMatch>, Box<dyn Error + Send + Sync>> {
+) -> Result<Vec<SenderMatch>, BoxError> {
     let MailAddr { local_part, domain } = sender;
 
     // Look up email address with domain-part converted to ASCII form.
@@ -97,7 +96,7 @@ pub async fn find_matching_senders(
     Ok(sender_matches)
 }
 
-pub type SigningSendersResult = Result<Vec<UnresolvedSenderMatch>, Box<dyn Error + Send + Sync>>;
+pub type SigningSendersResult = Result<Vec<UnresolvedSenderMatch>, BoxError>;
 
 pub trait SigningSendersDb: fmt::Debug + Send + Sync {
     // Hack(ish): *only* in combination slurp:senders and slurp:keys, must be
@@ -111,7 +110,7 @@ pub trait SigningSendersDb: fmt::Debug + Send + Sync {
 
 pub async fn read_signing_senders(
     value: &str,
-) -> Result<Box<dyn SigningSendersDb>, Box<dyn Error + Send + Sync>> {
+) -> Result<Box<dyn SigningSendersDb>, BoxError> {
     if let Some(s) = strip_slurp_prefix_or_bare(value) {
         let db = filesystem::read_slurp_signing_senders(s).await?;
         Ok(Box::new(db))
@@ -131,7 +130,7 @@ pub async fn read_signing_senders(
     }
 }
 
-pub type SigningKeysResult = Result<Vec<Arc<SigningKey>>, Box<dyn Error + Send + Sync>>;
+pub type SigningKeysResult = Result<Vec<Arc<SigningKey>>, BoxError>;
 
 pub trait SigningKeysDb: fmt::Debug + Send + Sync {
     // Hack(ish): see SigningSendersDb. Returns first missing key ID in `Err`.
@@ -144,7 +143,7 @@ pub trait SigningKeysDb: fmt::Debug + Send + Sync {
 
 pub async fn read_signing_keys(
     value: &str,
-) -> Result<Box<dyn SigningKeysDb>, Box<dyn Error + Send + Sync>> {
+) -> Result<Box<dyn SigningKeysDb>, BoxError> {
     if let Some(s) = strip_slurp_prefix_or_bare(value) {
         let db = filesystem::read_slurp_signing_keys(s).await?;
         Ok(Box::new(db))
@@ -164,7 +163,7 @@ pub async fn read_signing_keys(
     }
 }
 
-pub type ConfigOverridesResult = Result<Vec<Arc<ConfigOverrides>>, Box<dyn Error + Send + Sync>>;
+pub type ConfigOverridesResult = Result<Vec<Arc<ConfigOverrides>>, BoxError>;
 
 pub trait ConnectionOverridesDb: fmt::Debug + Send + Sync {
     fn find_all(&self, ip: IpAddr) -> BoxFuture<'_, ConfigOverridesResult>;
@@ -172,7 +171,7 @@ pub trait ConnectionOverridesDb: fmt::Debug + Send + Sync {
 
 pub async fn read_connection_overrides(
     value: &str,
-) -> Result<Box<dyn ConnectionOverridesDb>, Box<dyn Error + Send + Sync>> {
+) -> Result<Box<dyn ConnectionOverridesDb>, BoxError> {
     if let Some(s) = strip_slurp_prefix_or_bare(value) {
         let db = filesystem::read_slurp_connection_overrides(s).await?;
         Ok(Box::new(db))
@@ -198,7 +197,7 @@ pub trait RecipientOverridesDb: fmt::Debug + Send + Sync {
 
 pub async fn read_recipient_overrides(
     value: &str,
-) -> Result<Box<dyn RecipientOverridesDb>, Box<dyn Error + Send + Sync>> {
+) -> Result<Box<dyn RecipientOverridesDb>, BoxError> {
     if let Some(s) = strip_slurp_prefix_or_bare(value) {
         let db = filesystem::read_slurp_recipient_overrides(s).await?;
         Ok(Box::new(db))

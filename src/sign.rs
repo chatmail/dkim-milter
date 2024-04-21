@@ -24,10 +24,11 @@ use crate::{
     },
     datastore::SenderMatch,
     format::MailAddr,
+    util::BoxError,
 };
-use indymilter::{ActionError, ContextActions, Status};
-use log::{error, info, warn};
-use std::{collections::HashSet, error::Error, sync::Arc};
+use indymilter::{ContextActions, Status};
+use log::info;
+use std::{collections::HashSet, sync::Arc};
 use viadkim::{
     crypto::SigningKey,
     header::{FieldName, HeaderFields},
@@ -44,33 +45,32 @@ pub struct Signer {
 }
 
 impl Signer {
+    // Note on failure modes: Any error while initialising the signer is treated
+    // as fatal for entering signing mode. It is the responsibility of the user
+    // to provide signing configuration that is also correct *after* assembly.
     pub fn init(
-        id: &str,
         config: &Config,
         headers: HeaderFields,
-        sender: &MailAddr,
+        sender: MailAddr,
         matches: Vec<SenderMatch>,
         connection_overrides: &PartialSigningConfig,
         recipient_overrides: &PartialSigningConfig,
-    ) -> Result<Self, Box<dyn Error + Send + Sync>> {
+    ) -> Result<Self, BoxError> {
         assert!(!matches.is_empty());
 
-        // step through matches and create SignRequest for each match
+        if matches.len() > 10 {
+            return Err("more than 10 signatures requested".into());
+        }
 
         let mut requests = vec![];
         let mut signed_domains = vec![];
 
-        for (i, match_) in matches.into_iter().enumerate() {
-            if i >= 10 {
-                warn!("{id}: more than 10 signatures requested for this message, ignoring further requests");
-                break;
-            }
-
-            let (domain, identity) = get_identifiers(match_.domain, sender);
+        for match_ in matches {
+            let (domain, identity) = get_identifiers(match_.domain, &sender);
             let selector = match_.selector;
             let signing_key = match_.key;
 
-            let final_overrides: PartialSigningConfig = match &match_.signing_config {
+            let final_overrides = match &match_.signing_config {
                 Some(c) => {
                     // If there are per-sender/per-signature signing config
                     // overrides, combine them all together. The recipient
@@ -81,34 +81,23 @@ impl Signer {
                 None => connection_overrides.merged_with(recipient_overrides),
             };
 
-            let signing_config = match config.signing_config.merged_with(&final_overrides) {
-                Ok(config) => config,
-                Err(e) => {
-                    warn!("{id}: failed to construct valid signing configuration, ignoring request: {e}");
-                    continue;
-                }
-            };
+            let signing_config = config.signing_config.merged_with(&final_overrides)
+                .map_err(|e| format!("sign request had inconsistent signing configuration: {e}"))?;
 
-            match make_sign_request(
+            let request = make_sign_request(
                 &signing_config,
                 &headers,
                 domain.clone(),
                 identity,
                 selector,
                 signing_key,
-            ) {
-                Ok(request) => {
-                    signed_domains.push(domain);
-                    requests.push(request);
-                }
-                Err(e) => {
-                    warn!("{id}: failed to create sign request, ignoring request: {e}");
-                }
-            }
+            )?;
+
+            signed_domains.push(domain);
+            requests.push(request);
         }
 
-        let signer = viadkim::Signer::prepare_signing(headers, requests)
-            .map_err(|e| format!("could not prepare signing process: {e}"))?;
+        let signer = viadkim::Signer::prepare_signing(headers, requests)?;
 
         Ok(Self {
             delegate: signer,
@@ -116,14 +105,14 @@ impl Signer {
         })
     }
 
-    pub fn process_body_chunk(&mut self, chunk: &[u8]) -> Result<Status, Box<dyn Error>> {
+    pub fn process_body_chunk(&mut self, chunk: &[u8]) -> Status {
         let status = self.delegate.process_body_chunk(chunk);
 
-        Ok(if let BodyHasherStance::Done = status {
+        if let BodyHasherStance::Done = status {
             Status::Skip
         } else {
             Status::Continue
-        })
+        }
     }
 
     pub async fn finish(
@@ -131,27 +120,26 @@ impl Signer {
         id: &str,
         config: &Config,
         actions: &impl ContextActions,
-    ) -> Result<Status, ActionError> {
+    ) -> Result<Status, BoxError> {
         let sigs = self.delegate.sign().await;
         let domains = self.signed_domains;
 
         for (res, domain) in sigs.into_iter().zip(domains) {
-            match res {
-                Ok(SigningOutput { signature, header_name, header_value }) => {
-                    if config.dry_run {
-                        info!("{id}: signed message for {} [dry run, not done]", signature.domain);
-                    } else {
-                        info!("{id}: signed message for {}", signature.domain);
+            // A per-signature error here is unexpected. Treat this (like the
+            // error below when attempting to insert the header) as a failure to
+            // provide service, and abort the message transaction.
+            let SigningOutput { signature, header_name, header_value } =
+                res.map_err(|e| format!("failed to sign message for {domain}: {e}"))?;
 
-                        // convert SMTP CRLF to milter line endings
-                        let value = header_value.replace("\r\n", "\n");
+            if config.dry_run {
+                info!("{id}: signed message for {} [dry run, not done]", signature.domain);
+            } else {
+                info!("{id}: signed message for {}", signature.domain);
 
-                        actions.insert_header(0, header_name, value).await?;
-                    }
-                }
-                Err(_) => {
-                    error!("{id}: failed to sign message for {domain}");
-                }
+                // Convert SMTP CRLF to milter line endings.
+                let value = header_value.replace("\r\n", "\n");
+
+                actions.insert_header(0, header_name, value).await?;
             }
         }
 
@@ -195,12 +183,12 @@ fn make_sign_request(
     identity: Option<Identity>,
     selector: Selector,
     signing_key: Arc<SigningKey>,
-) -> Result<SignRequest<Arc<SigningKey>>, Box<dyn Error>> {
+) -> Result<SignRequest<Arc<SigningKey>>, BoxError> {
     let key_type = signing_key.key_type();
 
     let hash_algorithm = config.hash_algorithm;
     let alg = SigningAlgorithm::from_parts(key_type, hash_algorithm)
-        .ok_or("invalid key type/hash algorithm pair")?;
+        .ok_or("invalid key type/hash algorithm pair in sign request")?;
 
     let mut request = SignRequest::new(domain, selector, alg, signing_key);
 

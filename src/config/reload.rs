@@ -45,8 +45,8 @@ pub async fn reload(current_session_config: &RwLock<Arc<SessionConfig>>, opts: &
         let mut locked_config = current_session_config.write()
             .expect("could not get configuration write lock");
 
-        // for params that cannot be reloaded, restore them to original value in
-        // newly loaded config
+        // For params that cannot be reloaded, restore them to original value in
+        // newly loaded config: repeated reloading, repeated warning.
         if config.socket != locked_config.config.socket {
             let old_socket = locked_config.config.socket.clone();
             rejected_socket = Some(mem::replace(&mut config.socket, old_socket));

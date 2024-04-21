@@ -25,10 +25,10 @@ use crate::{
     },
     format::MailAddr,
     resolver::Resolver,
+    util::BoxError,
 };
 use indymilter::{ContextActions, SetErrorReply, Status};
 use log::{debug, info};
-use std::error::Error;
 use viadkim::{
     header::{FieldName, HeaderFields},
     message_hash::BodyHasherStance,
@@ -96,17 +96,17 @@ impl Verifier {
         }
     }
 
-    pub fn process_body_chunk(&mut self, chunk: &[u8]) -> Result<Status, Box<dyn Error>> {
+    pub fn process_body_chunk(&mut self, chunk: &[u8]) -> Status {
         let status = match &mut self.delegate {
             Some(verifier) => verifier.process_body_chunk(chunk),
-            None => return Ok(Status::Skip),
+            None => return Status::Skip,
         };
 
-        Ok(if let BodyHasherStance::Done = status {
+        if let BodyHasherStance::Done = status {
             Status::Skip
         } else {
             Status::Continue
-        })
+        }
     }
 
     pub async fn finish(
@@ -116,7 +116,7 @@ impl Verifier {
         authserv_id: &str,
         reply: &mut impl SetErrorReply,
         actions: &impl ContextActions,
-    ) -> Result<Status, Box<dyn Error>> {
+    ) -> Result<Status, BoxError> {
         let sigs = if let Some(verifier) = self.delegate {
             verifier.finish()
         } else {

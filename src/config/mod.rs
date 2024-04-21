@@ -135,10 +135,9 @@ impl From<ValidationError> for ConfigErrorKind {
     }
 }
 
-pub fn log_errors(id: Option<&str>, error: &(dyn Error + Send + Sync + 'static)) {
-    let mut error: &(dyn Error + 'static) = error;
-
+pub fn log_errors(id: Option<&str>, mut error: &(dyn Error + 'static)) {
     let mut msg = format!("{error}");
+
     while let Some(next) = error.source() {
         error = next;
         write!(msg, ": {error}").unwrap();
