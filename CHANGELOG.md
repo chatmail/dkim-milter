@@ -31,6 +31,11 @@ The minimum supported Rust version is now 1.71.1.
   reply being sent to the client. Previously, configuration was always validated
   eagerly and such errors were not possible.
 
+* In parameter `reject_failures`, value `author-mismatch` now causes signatures
+  from authors where the *From* domain is a subdomain of the signing domain to
+  be treated as acceptable. Previously only exact matches where tolerated; exact
+  matching is still available through new value `author-mismatch-strict`.
+
 ### Added
 
 * New data source `file:` has been added to support for configuration data being

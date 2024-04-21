@@ -32,6 +32,7 @@ use std::error::Error;
 use viadkim::{
     header::{FieldName, HeaderFields},
     message_hash::BodyHasherStance,
+    record::{DkimKeyRecord, SelectorFlag},
     signature::DkimSignature,
     verifier::{self, VerificationError, VerificationResult, VerificationStatus},
 };
@@ -122,59 +123,17 @@ impl Verifier {
             vec![]
         };
 
-        #[derive(PartialEq)]
-        enum SigStatus {
-            Missing,  // no signature present
-            Failing,  // no passing signature present
-            Passing,  // a passing signature (not matching author domain) is present
-            PassingFrom,  // a passing signature with author domain match is present
-        }
+        let rejects = &self.config.reject_failures.0;
 
-        let mut sig_status = SigStatus::Missing;
+        let exact = rejects.contains(&RejectFailure::AuthorMismatchStrict);
+        let mut astatus = AggregateStatus::NoSignature;
 
-        let from_addresses = &self.from_addresses;
-
-        // log all sigs, and determine status for potential rejection
-
+        // For all signatures, determine status for potential rejection and log
+        // verification result.
         for sig in &sigs {
+            update_aggregate_status(&mut astatus, sig, &self.from_addresses, exact);
+
             let is_testing = matches!(&sig.key_record, Some(r) if r.is_testing());
-
-            // DKIM key records in testing mode are treated as passing!
-
-            match sig_status {
-                SigStatus::Missing => {
-                    // set status to Failing|Passing|PassingFrom as appropriate
-                    if sig.status == VerificationStatus::Success || is_testing {
-                        if is_author_matched_domain(sig.signature.as_ref(), from_addresses) {
-                            sig_status = SigStatus::PassingFrom;
-                        } else {
-                            sig_status = SigStatus::Passing;
-                        }
-                    } else {
-                        sig_status = SigStatus::Failing;
-                    }
-                }
-                SigStatus::Failing => {
-                    // check for Passing|PassingFrom and upgrade if appropriate
-                    if sig.status == VerificationStatus::Success || is_testing {
-                        if is_author_matched_domain(sig.signature.as_ref(), from_addresses) {
-                            sig_status = SigStatus::PassingFrom;
-                        } else {
-                            sig_status = SigStatus::Passing;
-                        }
-                    }
-                }
-                SigStatus::Passing => {
-                    // check for PassingFrom and upgrade if appropriate
-                    if (sig.status == VerificationStatus::Success || is_testing)
-                        && is_author_matched_domain(sig.signature.as_ref(), from_addresses)
-                    {
-                        sig_status = SigStatus::PassingFrom;
-                    }
-                }
-                SigStatus::PassingFrom => {}
-            }
-
             let testing = "test mode";
 
             let comment;
@@ -206,12 +165,10 @@ impl Verifier {
         }
 
         // See RFC 7372, section 3.1 for these rejections.
-        // We don't make distinction between passing and acceptable signatures,
-        // so use these status codes slightly differently.
+        // We don’t make the distinction between passing and acceptable
+        // signatures, so use these status codes slightly differently.
 
-        let rejects = &self.config.reject_failures.0;
-
-        if rejects.contains(&RejectFailure::Missing) && sig_status == SigStatus::Missing {
+        if rejects.contains(&RejectFailure::Missing) && astatus == AggregateStatus::NoSignature {
             if config.dry_run {
                 debug!("{id}: rejected message without signature [dry run, not done]");
                 return Ok(Status::Continue);
@@ -222,7 +179,7 @@ impl Verifier {
             }
         }
 
-        if rejects.contains(&RejectFailure::NoPass) && sig_status == SigStatus::Failing {
+        if rejects.contains(&RejectFailure::NoPass) && astatus == AggregateStatus::AllFailing {
             if config.dry_run {
                 debug!("{id}: rejected message without acceptable signature [dry run, not done]");
                 return Ok(Status::Continue);
@@ -233,7 +190,10 @@ impl Verifier {
             }
         }
 
-        if rejects.contains(&RejectFailure::AuthorMismatch) && sig_status == SigStatus::Passing {
+        if (rejects.contains(&RejectFailure::AuthorMismatch)
+            || rejects.contains(&RejectFailure::AuthorMismatchStrict))
+            && astatus == AggregateStatus::Passing
+        {
             if config.dry_run {
                 debug!("{id}: rejected message without acceptable author-matched signature [dry run, not done]");
                 return Ok(Status::Continue);
@@ -281,6 +241,70 @@ fn make_signed_headers_specs(
     }
 
     (headers_required_in_signature, headers_forbidden_to_be_unsigned)
+}
+
+/// Verification status of the aggregate of signatures.
+#[derive(PartialEq)]
+enum AggregateStatus {
+    /// Starting state: no signature present.
+    NoSignature,
+    /// No passing signature present.
+    AllFailing,
+    /// A passing signature not matching the author domain is present.
+    Passing,
+    /// A passing signature with author domain match is present.
+    PassingFrom,
+}
+
+/// Advances the ‘aggregate status’ state according to the incoming verification
+/// result status.
+fn update_aggregate_status(
+    current_status: &mut AggregateStatus,
+    res: &VerificationResult,
+    from_addrs: &[MailAddr],
+    exact: bool,
+) {
+    let signature = res.signature.as_ref();
+    let record = res.key_record.as_deref();
+
+    // DKIM public key records in testing mode are treated as passing.
+    let passing =
+        res.status == VerificationStatus::Success || matches!(record, Some(r) if r.is_testing());
+
+    match current_status {
+        AggregateStatus::NoSignature => {
+            // When no signature has yet been seen, progress to state
+            // AllFailing|Passing|PassingFrom as appropriate.
+            if passing {
+                if has_author_match(signature, record, from_addrs, exact) {
+                    *current_status = AggregateStatus::PassingFrom;
+                } else {
+                    *current_status = AggregateStatus::Passing;
+                }
+            } else {
+                *current_status = AggregateStatus::AllFailing;
+            }
+        }
+        AggregateStatus::AllFailing => {
+            // When only failing signatures have been seen, progress to state
+            // Passing|PassingFrom as appropriate.
+            if passing {
+                if has_author_match(signature, record, from_addrs, exact) {
+                    *current_status = AggregateStatus::PassingFrom;
+                } else {
+                    *current_status = AggregateStatus::Passing;
+                }
+            }
+        }
+        AggregateStatus::Passing => {
+            // When only a passing signature with non-author domain has been
+            // seen, progress to state PassingFrom if possible.
+            if passing && has_author_match(signature, record, from_addrs, exact) {
+                *current_status = AggregateStatus::PassingFrom;
+            }
+        }
+        AggregateStatus::PassingFrom => {}
+    }
 }
 
 fn get_domain_from_verification_result(res: &VerificationResult) -> String {
@@ -407,7 +431,8 @@ fn compute_signature_prefixes_internal(
 
         // Step through all *other* signatures and use them to determine final
         // header.b value of this signature.
-        'others: for (other_index, other_str) in sigs {
+        'others:
+        for (other_index, other_str) in sigs {
             if other_index == this_index {
                 continue;
             }
@@ -481,16 +506,40 @@ fn compute_signature_prefixes_internal(
     result
 }
 
-// Note: in OpenDKIM, this concept is called an ‘author signature’.
-fn is_author_matched_domain(sig: Option<&DkimSignature>, from_addresses: &[MailAddr]) -> bool {
+// What is an ‘author-matched signature’ (RFC 7372) or an ‘Author Domain
+// Signature’ (RFC 6541 [ATPS])? It’s not well defined really, but see also
+// remarks in RFC 6376, sections 3.10f. and 8.14. We take it to mean a signature
+// with signing domain matching (subdomain or exact domain, see below) the
+// message author’s (From) domain.
+fn has_author_match(
+    sig: Option<&DkimSignature>,
+    record: Option<&DkimKeyRecord>,
+    from_addrs: &[MailAddr],
+    exact: bool,
+) -> bool {
     let domain = match sig {
-        Some(sig) => sig.domain.to_ascii(),
+        Some(sig) => &sig.domain,
         None => return false,
     };
 
-    from_addresses
-        .iter()
-        .any(|addr| addr.domain.to_ascii().eq_ignore_ascii_case(&domain))
+    let mut ascii_domain = None;
+
+    for addr in from_addrs {
+        if addr.domain.eq_or_subdomain_of(domain) {
+            // We have at least an author subdomain match. But do we need an
+            // exact domain match? If the record has `t=s` then yes.
+            if exact || matches!(record, Some(r) if r.flags.contains(&SelectorFlag::NoSubdomains)) {
+                let adomain = ascii_domain.get_or_insert_with(|| domain.to_ascii());
+                if addr.domain.to_ascii() == *adomain {
+                    return true;
+                }
+            } else {
+                return true;
+            }
+        }
+    }
+
+    false
 }
 
 #[cfg(test)]

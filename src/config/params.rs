@@ -252,6 +252,7 @@ pub fn parse_reject_failures(s: &str) -> Result<RejectFailures, ParseParamError>
             "missing" => RejectFailure::Missing,
             "no-pass" => RejectFailure::NoPass,
             "author-mismatch" => RejectFailure::AuthorMismatch,
+            "author-mismatch-strict" => RejectFailure::AuthorMismatchStrict,
             _ => return Err(ParseParamError::InvalidRejectFailure(value.into())),
         };
         set.insert(value);

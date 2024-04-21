@@ -553,7 +553,7 @@ The default is
 If DKIM Milter was compiled with the legacy compatibility feature “pre-rfc8301”,
 the hard lower limit for RSA key sizes is 512 bits.
 .TP
-.BR reject_failures " (\fIcomma-separated\fR: " missing ", " no-pass ", " author-mismatch )
+.BR reject_failures " (\fIcomma-separated\fR: " missing ", " no-pass ", " author-mismatch ", " author-mismatch-strict )
 The set of signature verification results to reject with an SMTP error reply.
 The value is a comma-separated set of the following failure specifications.
 .BR missing ,
@@ -564,9 +564,16 @@ reject messages without a passing DKIM signature.
 reject messages that don’t have a passing DKIM signature where the author domain
 found in the
 .I From
-header matches the signing domain in the signature’s
+header matches (ie, is equal to, or, unless the public key record is marked
+.IR t=s ,
+a subdomain of) the signing domain in the
+signature’s
 .I d=
 tag.
+.BR author-mismatch-strict ,
+same as
+.BR author-mismatch ,
+but allows only exact domain matches, no subdomains.
 The failure specifications correspond to the three DKIM failure status codes
 specified in RFC\~7372, section\~3.1.
 Note that a failing signature is treated as passing if the DKIM public key

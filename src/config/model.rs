@@ -756,6 +756,7 @@ pub enum RejectFailure {
     Missing,
     NoPass,
     AuthorMismatch,
+    AuthorMismatchStrict,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]

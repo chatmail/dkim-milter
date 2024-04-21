@@ -310,9 +310,9 @@ dkimdo genkey --out-file private.pem ed25519
 ```
 
 These commands create a signing key file for either the RSA or Ed25519 key type.
-Each command also prints out the corresponding *DKIM public key record* to
-standard error. For example, for RSA the printed record looks something like the
-following:
+Each command also prints out the corresponding *DKIM public key record* to the
+standard error stream. For example, for RSA the printed record looks something
+like the following:
 
 ```
 v=DKIM1; k=rsa; p=MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCA...
@@ -343,7 +343,7 @@ record can also be generated from an existing signing key using `dkimdo
 keyinfo`.
 
 Note that dkimdo output is not at all bespoke or magical, you can just as well
-produce the key material using the standard `openssl` utility from the OpenSSL 3
+produce the key material using the standard `openssl` utility from the OpenSSL
 project.
 
 [dkimdo]: https://crates.io/crates/dkimdo
