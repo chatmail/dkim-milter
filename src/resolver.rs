@@ -16,7 +16,7 @@
 
 use crate::util::{self, BoxFuture};
 use domain::{
-    base::{iana::Rcode, Dname, Rtype},
+    base::{iana::Rcode, Name, Rtype},
     rdata::Txt,
     resolv::{
         stub::conf::{ResolvConf, ResolvOptions},
@@ -88,17 +88,17 @@ impl LookupTxt for DomainResolver {
     type Query<'a> = BoxFuture<'a, io::Result<Self::Answer>>;
 
     fn lookup_txt(&self, domain: &str) -> Self::Query<'_> {
-        let dname = Dname::vec_from_str(domain);
+        let name = Name::vec_from_str(domain);
 
         Box::pin(async move {
-            let dname = dname.map_err(|_| ErrorKind::InvalidInput)?;
+            let name = name.map_err(|_| ErrorKind::InvalidInput)?;
 
-            let answer = self.resolver.query((dname, Rtype::Txt)).await?;
+            let answer = self.resolver.query((name, Rtype::TXT)).await?;
 
             if answer.is_error() {
                 return Err(match answer.header().rcode() {
-                    Rcode::NXDomain => ErrorKind::NotFound.into(),
-                    rcode => io::Error::new(ErrorKind::Other, rcode.to_string()),
+                    Rcode::NXDOMAIN => ErrorKind::NotFound.into(),
+                    rcode => io::Error::other(rcode.to_string()),
                 });
             }
 

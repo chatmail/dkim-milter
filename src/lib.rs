@@ -55,7 +55,7 @@ use log::{error, info, warn, LevelFilter, Log, Metadata, Record, SetLoggerError}
 use std::{
     env,
     future::Future,
-    io::{self, stderr, ErrorKind, Write},
+    io::{self, stderr, Write},
     num::NonZeroUsize,
     sync::{Arc, RwLock},
 };
@@ -187,20 +187,12 @@ fn configure_logging(config: &LogConfig) -> Result<(), BoxError> {
 
     match config.log_destination {
         LogDestination::Syslog => {
-            syslog::init_unix(config.syslog_facility.into(), level).map_err(|e| {
-                io::Error::new(
-                    ErrorKind::Other,
-                    format!("could not initialize syslog: {e}"),
-                )
-            })?;
+            syslog::init_unix(config.syslog_facility.into(), level)
+                .map_err(|e| io::Error::other(format!("could not initialize syslog: {e}")))?;
         }
         LogDestination::Stderr => {
-            StderrLog::init(level).map_err(|e| {
-                io::Error::new(
-                    ErrorKind::Other,
-                    format!("could not initialize stderr log: {e}"),
-                )
-            })?;
+            StderrLog::init(level)
+                .map_err(|e| io::Error::other(format!("could not initialize stderr log: {e}")))?;
         }
     }
 

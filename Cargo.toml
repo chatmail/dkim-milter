@@ -2,7 +2,7 @@
 name = "dkim-milter"
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.71.1"
+rust-version = "1.74.0"
 description = "Milter for DKIM signing and verification"
 license = "GPL-3.0-or-later"
 categories = ["email"]
@@ -12,7 +12,7 @@ exclude = ["/.gitignore", "/.gitlab-ci.yml"]
 
 [dependencies]
 byte-strings = "0.3.1"
-domain = { version = "0.9.3", features = ["resolv"] }
+domain = { version = "0.10.0", features = ["resolv"] }
 futures-util = "0.3.30"
 idna = "0.4.0"
 indymilter = "0.3.0"
@@ -24,7 +24,7 @@ signal-hook-tokio = { version = "0.3.1", features = ["futures-v0_3"] }
 sqlx = { version = "0.7.4", features = ["runtime-tokio"], optional = true }
 syslog = "6.1.0"
 tokio = { version = "1.37.0", features = ["fs", "macros", "net", "rt", "rt-multi-thread", "sync"] }
-viadkim = "0.2.0-alpha.2"
+viadkim = "0.2.0-alpha.3"
 
 [dev-dependencies]
 indymilter-test = { version = "0.2.0", features = ["regex"] }

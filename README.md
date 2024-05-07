@@ -52,7 +52,7 @@ file path is `/etc/dkim-milter/dkim-milter.conf`. When building DKIM Milter,
 this default path can be overridden by setting the environment variable
 `DKIM_MILTER_CONFIG_FILE` to the desired path.
 
-The minimum supported Rust version is 1.71.1.
+The minimum supported Rust version is 1.74.0.
 
 [Rust]: https://www.rust-lang.org
 [crates.io]: https://crates.io/crates/dkim-milter

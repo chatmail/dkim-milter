@@ -9,11 +9,11 @@ minimum supported Rust version being considered breaking changes.
 
 ## 0.2.0 (unreleased)
 
-The minimum supported Rust version is now 1.71.1.
+The minimum supported Rust version is now 1.74.0.
 
 ### Changed
 
-* The minimum supported Rust version has been raised to 1.71.1.
+* The minimum supported Rust version has been raised to 1.74.0.
 
 * Parameters formerly pointing to table-like files now recognise a *data source*
   prefix. This concerns parameters `signing_senders`, `signing_keys`,
