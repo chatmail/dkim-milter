@@ -1979,9 +1979,9 @@ checksum = "49874b5167b65d7193b8aba1567f5c7d93d001cafc34600cee003eda787e483f"
 
 [[package]]
 name = "viadkim"
-version = "0.2.0-alpha.3"
+version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c20e0712faea3fb05926961029e47fd49a3078b64c478ba7d348b6f50ff73514"
+checksum = "6fbe3d7dd3cf3431b0151b92997000d346dba564c229c5933ef1a9cc16f13949"
 dependencies = [
  "base64ct",
  "digest",

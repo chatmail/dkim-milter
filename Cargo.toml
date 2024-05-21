@@ -24,7 +24,7 @@ signal-hook-tokio = { version = "0.3.1", features = ["futures-v0_3"] }
 sqlx = { version = "0.7.4", features = ["runtime-tokio"], optional = true }
 syslog = "6.1.0"
 tokio = { version = "1.37.0", features = ["fs", "macros", "net", "rt", "rt-multi-thread", "sync"] }
-viadkim = "0.2.0-alpha.3"
+viadkim = "0.2.0"
 
 [dev-dependencies]
 indymilter-test = { version = "0.2.0", features = ["regex"] }

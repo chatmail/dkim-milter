@@ -68,7 +68,7 @@ v=1; d=example.com; s=sel1; a=ed25519-sha256; t=1683290057;
     let status = conn.header("Subject", "An example message").await.unwrap();
     assert_eq!(status, Status::Continue);
 
-    let status = conn.header("Message-ID", "<3177820507316626058@example.com").await.unwrap();
+    let status = conn.header("Message-ID", "<3177820507316626058@example.com>").await.unwrap();
     assert_eq!(status, Status::Continue);
 
     let status = conn.eoh().await.unwrap();
