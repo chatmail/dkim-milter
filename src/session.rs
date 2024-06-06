@@ -83,7 +83,7 @@ struct MessageData {
     auth_results_i: usize,
     auth_results_deletions: Vec<usize>,
     mode: Mode,
-    headers: Vec<(FieldName, FieldBody)>,
+    headers: Vec<HeaderField>,
 }
 
 impl MessageData {

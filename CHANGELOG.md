@@ -19,10 +19,12 @@ The minimum supported Rust version is now 1.74.0.
   prefix. This concerns parameters `signing_senders`, `signing_keys`,
   `connection_overrides`, and `recipient_overrides`.
 
-  The former behaviour can be kept by prefixing the values with `<`: For
-  example, `signing_keys = /path/to/file` becomes `signing_keys =
-  </path/to/file`. (For backwards compatibility, bare paths for now keep the
-  same meaning as the `<`-prefixed paths.)
+  Previously, these parameters only allowed table-like files that were read and
+  validated eagerly; this behaviour is now represented by data source
+  `<`/`slurp:`: For example, `signing_keys = </path/to/file` is the new
+  equivalent of former `signing_keys = /path/to/file`. Though, for backwards
+  compatibility, the bare path continues to have the same meaning as the
+  prefixed path.
 
   With this change, reading and validation of table files has been overhauled,
   and some error messages have been adjusted.
@@ -39,12 +41,10 @@ The minimum supported Rust version is now 1.74.0.
 ### Added
 
 * New data source `file:` has been added to support for configuration data being
-  continually read from the filesystem. New data source `<`/`slurp:` represents
-  the former default behaviour.
+  continually read from the filesystem.
 
-* New data source `sqlite:` has been added for SQLite database support.
-
-  This data source is enabled with new Cargo feature `sqlite`.
+* New data source `sqlite:` has been added for SQLite database support. This
+  data source is enabled with new Cargo feature `sqlite`.
 
 ### Fixed
 

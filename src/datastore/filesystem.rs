@@ -86,10 +86,10 @@ impl Display for TableError {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         let file = self.file.display();
         match &self.kind {
-            TableErrorKind::Io(_) => write!(f, "I/O error reading table from {}", file),
-            TableErrorKind::Format(_) => write!(f, "wrong format in table at {}", file),
+            TableErrorKind::Io(_) => write!(f, "I/O error reading table from {file}"),
+            TableErrorKind::Format(_) => write!(f, "wrong format in table at {file}"),
             TableErrorKind::MissingKeyId(key_id) => {
-                write!(f, "key ID \"{key_id}\" not found in table at {}", file)
+                write!(f, "key ID \"{key_id}\" not found in table at {file}")
             }
         }
     }
