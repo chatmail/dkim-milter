@@ -7,8 +7,8 @@ description = "Milter for DKIM signing and verification"
 license = "GPL-3.0-or-later"
 categories = ["email"]
 keywords = ["dkim", "email", "milter"]
-repository = "https://gitlab.com/glts/dkim-milter"
-exclude = ["/.gitignore", "/.gitlab-ci.yml"]
+repository = "https://codeberg.org/glts/dkim-milter"
+exclude = ["/.gitignore", "/.woodpecker.yml"]
 
 [dependencies]
 byte-strings = "0.3.1"

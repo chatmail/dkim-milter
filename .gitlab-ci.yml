@@ -1,4 +1,0 @@
-image: rust
-test:
-  script:
-    - cargo test --features sqlite --verbose

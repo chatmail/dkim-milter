@@ -9,7 +9,11 @@ minimum supported Rust version being considered breaking changes.
 
 ## 0.2.0 (unreleased)
 
+With this release, development has moved from GitLab to the [Codeberg] platform.
+
 The minimum supported Rust version is now 1.74.0.
+
+[Codeberg]: https://codeberg.org
 
 ### Changed
 
