@@ -279,7 +279,7 @@ impl Session {
         // verifying.
         let authorized = is_trusted_sender(id, config, self.conn.ip, message.auth);
 
-        match (config.mode, authorized) {
+        let status = match (config.mode, authorized) {
             (OpMode::Sign | OpMode::Auto, Auth::Trusted) => {
                 let sender = match extract_sender(id, sender_address, from_addresses) {
                     Some(sender) => sender,
@@ -340,19 +340,19 @@ impl Session {
                     _ => vec![],
                 };
 
-                let status = self.enter_verifying_mode(id, headers, from_addresses).await;
-
-                Ok(status)
+                self.enter_verifying_mode(id, headers, from_addresses).await
             }
             (OpMode::Sign, Auth::Untrusted) => {
                 debug!("{id}: not signing message from untrusted sender");
-                Ok(Status::Continue)
+                Status::Continue
             }
             (OpMode::Verify, Auth::Trusted) => {
                 debug!("{id}: not verifying message from trusted sender");
-                Ok(Status::Continue)
+                Status::Continue
             }
-        }
+        };
+
+        Ok(status)
     }
 
     async fn enter_signing_mode(
@@ -361,7 +361,7 @@ impl Session {
         headers: HeaderFields,
         sender: MailAddr,
         matches: Vec<SenderMatch>,
-    ) -> Result<Status, BoxError> {
+    ) -> Status {
         debug!("{id}: entered signing mode");
 
         let config = &self.session_config.config;
@@ -371,7 +371,7 @@ impl Session {
             Err(e) => {
                 config::log_errors(Some(id), e.as_ref());
                 error!("{id}: failed to look up connection overrides, aborting message transaction");
-                return Ok(Status::Tempfail);
+                return Status::Tempfail;
             }
         };
 
@@ -384,7 +384,7 @@ impl Session {
             Err(e) => {
                 config::log_errors(Some(id), e.as_ref());
                 error!("{id}: failed to look up recipient overrides, aborting message transaction");
-                return Ok(Status::Tempfail);
+                return Status::Tempfail;
             }
         };
 
@@ -401,13 +401,13 @@ impl Session {
                 // Failure to construct the signer is due to a configuration
                 // mistake. (The error here is flat, not nested like above.)
                 error!("{id}: failed to initiate signing process: {e}");
-                return Ok(Status::Tempfail);
+                return Status::Tempfail;
             }
         };
 
         message.mode = Mode::Signing(signer);
 
-        Ok(Status::Continue)
+        Status::Continue
     }
 
     async fn enter_verifying_mode(
