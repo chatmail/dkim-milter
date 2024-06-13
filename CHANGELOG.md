@@ -7,7 +7,7 @@ minimum supported Rust version being considered breaking changes.
 
 [semantic versioning]: https://doc.rust-lang.org/cargo/reference/semver.html
 
-## 0.2.0 (unreleased)
+## 0.2.0-alpha.1 (2024-06-13)
 
 With this release, development has moved from GitLab to the [Codeberg] platform.
 

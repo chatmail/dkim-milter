@@ -92,9 +92,9 @@ might look like.
 For a hands-on introduction to getting started with DKIM Milter, see the
 included [tutorial document].
 
-[*dkim-milter.conf*(5)]: https://codeberg.org/glts/dkim-milter/src/tag/0.1.0/dkim-milter.conf.5
-[example configuration]: https://codeberg.org/glts/dkim-milter/src/tag/0.1.0/sample-conf
-[tutorial document]: https://codeberg.org/glts/dkim-milter/src/tag/0.1.0/TUTORIAL.md
+[*dkim-milter.conf*(5)]: https://codeberg.org/glts/dkim-milter/src/tag/0.2.0-alpha.1/dkim-milter.conf.5
+[example configuration]: https://codeberg.org/glts/dkim-milter/src/tag/0.2.0-alpha.1/sample-conf
+[tutorial document]: https://codeberg.org/glts/dkim-milter/src/tag/0.2.0-alpha.1/TUTORIAL.md
 
 ### Design
 
