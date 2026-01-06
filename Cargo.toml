@@ -34,3 +34,8 @@ indymilter-test = { version = "0.2.0", features = ["regex"] }
 pre-rfc8301 = ["viadkim/pre-rfc8301"]
 # Makes available the SQLite data source.
 sqlite = ["dep:sqlx", "sqlx/sqlite"]
+
+# The profile that 'dist' will build with
+[profile.dist]
+inherits = "release"
+lto = "thin"
