@@ -1,3 +1,6 @@
+> [!NOTE]
+> This is a fork of https://codeberg.org/glts/dkim-milter
+
 # DKIM Milter
 
 DKIM Milter is a milter application that signs and verifies email messages using
