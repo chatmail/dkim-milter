@@ -1,5 +1,8 @@
 > [!NOTE]
 > This is a fork of https://codeberg.org/glts/dkim-milter
+> 
+> Chatmail-specific patches:
+> - unix sockets use 760 mode
 
 # DKIM Milter
 

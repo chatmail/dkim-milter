@@ -28,6 +28,8 @@ use std::{
     path::Path,
     process,
 };
+use std::fs::Permissions;
+use std::os::unix::fs::PermissionsExt;
 use tokio::{
     fs,
     net::{TcpListener, UnixListener},
@@ -94,6 +96,11 @@ async fn main() {
                     process::exit(1);
                 }
             };
+
+            // Allow r/w from the same group
+            fs::set_permissions(path, Permissions::from_mode(0o760))
+                .await
+                .expect("Failed to set UNIX domain socket permissions");
 
             // Remember the socket file path, and delete it on shutdown.
             addr = listener.local_addr().unwrap();
